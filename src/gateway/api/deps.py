@@ -58,7 +58,7 @@ from gateway.services.code_execution import SandboxContainerRegistry
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, resolve_dashboard_session
 from gateway.services.feedback import FeedbackService
 from gateway.services.files import FileBackends, FileService, SandboxFileBridge, StagedFile
-from gateway.services.inference import IdempotencyService
+from gateway.services.inference import IdempotencyService, PassthroughResponseService
 from gateway.services.log_writer import LogWriter
 from gateway.services.master_key_service import hash_master_key, is_generated_master_key, load_master_key_hash
 from gateway.services.organization_pricing_service import OrganizationPricingService
@@ -736,6 +736,11 @@ def _file_backends(request: Request) -> FileBackends | None:
 def build_idempotency_service(uow: UnitOfWork, config: GatewayConfig) -> IdempotencyService:
     """Build idempotency-key handling for a completion request or the expiry sweep."""
     return IdempotencyService(uow, InferenceRepositories.on(uow), config)
+
+
+def get_passthrough_response_service() -> PassthroughResponseService:
+    """Build the service that shapes a pass-through endpoint's response."""
+    return PassthroughResponseService()
 
 
 def build_sandbox_file_bridge(

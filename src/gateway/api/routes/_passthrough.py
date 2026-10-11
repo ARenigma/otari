@@ -88,9 +88,12 @@ from gateway.services.model_access import (
     resolve_request_allowlist,
 )
 from gateway.services.pricing_service import (
+    ResolvedPricing,
     find_model_pricing,
     no_pricing_error_detail,
+    pricing_provenance,
     pricing_required_but_missing,
+    resolve_model_pricing,
 )
 from gateway.services.provider_kwargs import ResolvedProvider, missing_credential, resolve_provider_selector
 from gateway.services.workspace_scope import organization_for_workspace_id, resolve_workspace_id
@@ -147,6 +150,10 @@ class PassthroughOutcome(Generic[ResultT]):
     """The resolved selector the call was dispatched against."""
     headers: dict[str, str]
     """Rate-limit headers for routes that build their own response object."""
+    pricing: ResolvedPricing | None = None
+    """The rate found for the request and where it came from, or ``None`` when there is none."""
+    cost: Decimal | None = None
+    """The cost written to this request's usage row, or ``None`` when it was not priced."""
 
 
 async def run_passthrough(
@@ -336,6 +343,8 @@ async def run_passthrough(
             raise
 
     pricing: ModelPricing | None = None
+    # ``pricing`` with where it came from, recorded on the row it prices.
+    found_pricing: ResolvedPricing | None = None
     if reserve_before_resolve:
         # Nothing is resolved yet, so a rejection here records the requested
         # selector with no provider.
@@ -361,7 +370,7 @@ async def run_passthrough(
             # Unlike the branch below, the reservation is already held here, so a
             # failed lookup must refund before propagating or the estimate leaks.
             try:
-                pricing = await find_model_pricing(
+                found_pricing = await resolve_model_pricing(
                     db,
                     resolved.instance,
                     resolved.model,
@@ -377,6 +386,7 @@ async def run_passthrough(
                 await db.rollback()
                 await refund_reservation(db, reservation)
                 raise
+            pricing = found_pricing.pricing if found_pricing is not None else None
     else:
         try:
             resolved = resolve_provider_selector(config, model, user_id, workspace_id=workspace_id)
@@ -390,13 +400,14 @@ async def run_passthrough(
             )
             _raise_for_unresolvable_model(model, exc)
         if lookup_pricing:
-            pricing = await find_model_pricing(
+            found_pricing = await resolve_model_pricing(
                 db,
                 resolved.instance,
                 resolved.model,
                 use_defaults=pricing_use_defaults,
                 organization_id=organization_id,
             )
+            pricing = found_pricing.pricing if found_pricing is not None else None
         # Reserve first so user/blocked/budget rejections (404/403) precede the
         # missing-pricing rejection (402); refund if we then reject for no pricing.
         reservation = await _reserve(
@@ -536,6 +547,11 @@ async def run_passthrough(
         cost = quantize_cost(raw_cost) if raw_cost is not None else None
         if cost is not None and raw_cost is not None:
             usage_log.cost = cost
+            usage_log.calculated_at = usage_log.timestamp
+            if found_pricing is not None:
+                usage_log.pricing_source, usage_log.pricing_reference, usage_log.pricing_effective_at = (
+                    pricing_provenance(found_pricing)
+                )
             # The charge lines get the unrounded amount, the same way the token
             # path's do: the column is the amount, the lines explain it.
             billing = compute_meters(result, pricing, raw_cost) if compute_meters else None
@@ -587,7 +603,13 @@ async def run_passthrough(
     if relabel and resolved.alias is not None:
         relabel_model(result, resolved.alias)
 
-    return PassthroughOutcome(result=result, resolved=resolved, headers=headers)
+    return PassthroughOutcome(
+        result=result,
+        resolved=resolved,
+        headers=headers,
+        pricing=found_pricing,
+        cost=cost,
+    )
 
 
 DECISIONS_ENDPOINT = "/v1/decisions"

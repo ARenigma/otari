@@ -23,6 +23,7 @@ from gateway.services.inference._idempotency import (
     UnknownCaller,
 )
 from gateway.services.inference._lease import keep_claim_alive
+from gateway.services.inference._passthrough_responses import PassthroughResponseService
 from gateway.services.inference._responses_bridge import (
     REASONING_ITEM_ID_PREFIX,
     aresponses_via_chat_completions,
@@ -44,6 +45,7 @@ __all__ = [
     "IdempotentRequest",
     "InvalidKey",
     "KeyReused",
+    "PassthroughResponseService",
     "Replay",
     "StillInFlight",
     "UnknownDecisionProviderError",

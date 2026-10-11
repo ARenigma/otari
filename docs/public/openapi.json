@@ -6175,6 +6175,42 @@
         "title": "EmbeddedResource",
         "type": "object"
       },
+      "EmbeddingData": {
+        "description": "One input's embedding, in OpenAI's shape.",
+        "properties": {
+          "embedding": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "The vector, or its base64 encoding when the request asked for `encoding_format: base64`",
+            "title": "Embedding"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "object": {
+            "const": "embedding",
+            "default": "embedding",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "embedding"
+        ],
+        "title": "EmbeddingData",
+        "type": "object"
+      },
       "EmbeddingRequest": {
         "description": "OpenAI-compatible embedding request.",
         "properties": {
@@ -6236,6 +6272,94 @@
           "input"
         ],
         "title": "EmbeddingRequest",
+        "type": "object"
+      },
+      "EmbeddingResponse": {
+        "description": "An OpenAI-compatible embeddings response, with the gateway's inline cost on ``usage``.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingData"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbeddingUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent when the provider reported no usage"
+          }
+        },
+        "required": [
+          "data",
+          "model"
+        ],
+        "title": "EmbeddingResponse",
+        "type": "object"
+      },
+      "EmbeddingUsage": {
+        "description": "What an embeddings request was metered at, and what it cost.",
+        "properties": {
+          "cost_usd": {
+            "anyOf": [
+              {
+                "pattern": "^-?\\d+\\.\\d{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the request cost, as a six-decimal USD string; absent when it was not priced",
+            "title": "Cost Usd"
+          },
+          "pricing_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "organization",
+                  "deployment",
+                  "defaults"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which rate priced the request; absent when it was not priced",
+            "title": "Pricing Source"
+          },
+          "prompt_tokens": {
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt_tokens",
+          "total_tokens"
+        ],
+        "title": "EmbeddingUsage",
         "type": "object"
       },
       "EndUserPublic": {
@@ -14739,6 +14863,41 @@
         "title": "RequirementGroup",
         "type": "object"
       },
+      "RerankMeta": {
+        "description": "The provider's own billing report, passed through as it sent it.",
+        "properties": {
+          "billed_units": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billed Units"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          }
+        },
+        "title": "RerankMeta",
+        "type": "object"
+      },
       "RerankRequest": {
         "description": "Rerank request.",
         "properties": {
@@ -14806,6 +14965,145 @@
           "documents"
         ],
         "title": "RerankRequest",
+        "type": "object"
+      },
+      "RerankResponse": {
+        "description": "Documents ordered by relevance, with the gateway's metered usage.",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider-assigned response ID",
+            "title": "Id"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RerankMeta"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The provider's own billing report, unchanged"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The model that served the request",
+            "title": "Model"
+          },
+          "results": {
+            "description": "Results sorted by relevance_score, highest first",
+            "items": {
+              "$ref": "#/components/schemas/RerankResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/RerankUsage"
+          }
+        },
+        "required": [
+          "results",
+          "usage"
+        ],
+        "title": "RerankResponse",
+        "type": "object"
+      },
+      "RerankResult": {
+        "description": "One document's relevance to the query.",
+        "properties": {
+          "index": {
+            "description": "Zero-based index into the request's documents",
+            "title": "Index",
+            "type": "integer"
+          },
+          "relevance_score": {
+            "description": "Relevance score, higher is more relevant",
+            "title": "Relevance Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "relevance_score"
+        ],
+        "title": "RerankResult",
+        "type": "object"
+      },
+      "RerankUsage": {
+        "description": "What a rerank request was metered at, and what it cost.",
+        "properties": {
+          "cost_usd": {
+            "anyOf": [
+              {
+                "pattern": "^-?\\d+\\.\\d{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the request cost, as a six-decimal USD string; absent when it was not priced",
+            "title": "Cost Usd"
+          },
+          "pricing_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "organization",
+                  "deployment",
+                  "defaults"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which rate priced the request; absent when it was not priced",
+            "title": "Pricing Source"
+          },
+          "search_units": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Search units the request was billed for, present only when the model is priced per request: the provider's count rounded up, or one when it reported none",
+            "title": "Search Units"
+          },
+          "total_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tokens the provider reported, or null",
+            "title": "Total Tokens"
+          }
+        },
+        "title": "RerankUsage",
         "type": "object"
       },
       "ResendVerificationRequest": {
@@ -24875,7 +25173,7 @@
     },
     "/api/v1/embeddings": {
       "post": {
-        "description": "OpenAI-compatible embeddings endpoint.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
+        "description": "OpenAI-compatible embeddings endpoint.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user\n\nA priced response carries its cost on `usage` as `cost_usd` (a six-decimal\nUSD string) and `pricing_source`, as a chat completion does; an unpriced one\ncarries neither.",
         "operationId": "embeddings-create_embedding",
         "requestBody": {
           "content": {
@@ -24891,7 +25189,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -35301,7 +35601,7 @@
     },
     "/api/v1/rerank": {
       "post": {
-        "description": "Rerank documents by relevance to a query.\n\nBilling: a model priced per request (``unit: requests``) is charged per\nsearch unit the provider reports, or for one unit when it reports none. A\nmodel priced per token is charged on the input tokens the provider reports.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
+        "description": "Rerank documents by relevance to a query.\n\nBilling: a model priced per request (``unit: requests``) is charged per\nsearch unit the provider reports, or for one unit when it reports none. A\nmodel priced per token is charged on the input tokens the provider reports.\n\n``usage`` carries what the gateway metered: the provider's tokens, the\nsearch units billed when the model is priced per request, and, when the\nrequest was priced, ``cost_usd`` and ``pricing_source`` as a completion's\nusage does. ``meta`` is the provider's own billing report, unchanged.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
         "operationId": "rerank-create_rerank",
         "requestBody": {
           "content": {
@@ -35317,7 +35617,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResponse"
+                }
               }
             },
             "description": "Successful Response"

@@ -16,6 +16,7 @@ from gateway.core.config import API_ROOT
 from gateway.core.metered_pricing import meter_cost, priced_per_request, quantize_cost, request_charge_line, to_decimal
 from gateway.log_config import logger
 from gateway.models.pricing import ModelPricing, OrganizationModelPricing, PriceSource
+from gateway.models.usage import PRICING_REFERENCE_MAX_LENGTH
 
 # A zero-token usage is enough to resolve a model's per-million rates from
 # genai-prices without depending on real token counts.
@@ -767,6 +768,27 @@ class ResolvedPricing(NamedTuple):
     effective_at: datetime | None = None
 
 
+class PricingProvenance(NamedTuple):
+    """The usage-row columns that say which rate priced a row, in column order."""
+
+    source: PriceSource
+    reference: str | None
+    effective_at: datetime | None
+
+
+def pricing_provenance(resolved: ResolvedPricing) -> PricingProvenance:
+    """What a usage row priced at ``resolved`` records about the rate.
+
+    A model key is unbounded where the reference column is not, and an
+    oversized value would fail the row's insert on PostgreSQL rather than lose a
+    label, so a reference past the limit is recorded as unknown.
+    """
+    reference = resolved.reference
+    if reference is not None and len(reference) > PRICING_REFERENCE_MAX_LENGTH:
+        reference = None
+    return PricingProvenance(resolved.source, reference, resolved.effective_at)
+
+
 async def resolve_model_pricing(
     db: AsyncSession,
     provider: str | None,
@@ -908,6 +930,18 @@ def billed_search_units(billed_units: Mapping[str, float] | None) -> int:
     if reported is None or reported <= 0:
         return 1
     return ceil(reported)
+
+
+def metered_search_units(pricing: ModelPricing | None, billed_units: Mapping[str, float] | None) -> int | None:
+    """The search units a rerank request was billed for, or ``None`` when it was not billed per unit.
+
+    Only a model priced per request bills search units, at the count
+    :func:`billed_search_units` derives from the provider's report, so this is
+    the count the request's ``search_units`` billing meter records.
+    """
+    if not priced_per_request(pricing):
+        return None
+    return billed_search_units(billed_units)
 
 
 def rerank_cost(pricing: ModelPricing | None, *, search_units: int, total_tokens: int | None) -> Decimal | None:

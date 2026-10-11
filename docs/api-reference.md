@@ -110,8 +110,9 @@ it took, in `Otari-Provider`, `Otari-Attempt-Count`, `Otari-Fallback` and
 [What is billed and what the caller sees](routing.md#what-is-billed-and-what-the-caller-sees).
 
 A priced response also carries its cost on the usage object it already returns,
-as `usage.cost_usd` (a six-decimal USD string) and `usage.pricing_source`. On a
-stream the fields ride the terminal usage event: the last usage chunk for Chat
+as `usage.cost_usd` (a six-decimal USD string) and `usage.pricing_source`. The
+standalone [rerank](#rerank) and embeddings endpoints carry the same two fields
+on their `usage`. On a stream the fields ride the terminal usage event: the last usage chunk for Chat
 Completions, `message_delta` for Messages, and `response.completed` for
 Responses. The two fields always appear together, and an unpriced or
 unreported request carries neither.
@@ -265,6 +266,34 @@ turned off, or `OTARI_SECRET_KEY` was rotated away. Two more come from failures:
 the gateway stops after the provider answers and before the response is stored,
 or the database stays unreachable for about `idempotency_lease_sec` while the
 original runs, so its claim lapses and a retry takes it over.
+
+## Rerank
+
+`POST /api/v1/rerank` orders a list of documents by relevance to a query. The
+response keeps the provider's own billing report in `meta`, unchanged, and says
+in `usage` what the gateway metered and what it charged:
+
+```json
+{
+  "id": "…",
+  "model": "rerank-v3.5",
+  "results": [{"index": 0, "relevance_score": 0.86}],
+  "meta": {"billed_units": {"search_units": 1.0}, "tokens": null},
+  "usage": {"total_tokens": null, "search_units": 1, "cost_usd": "0.002000", "pricing_source": "deployment"}
+}
+```
+
+- `total_tokens` is the token count the provider reported, or null when it reported none.
+- `search_units` is the number of search units the request was billed for, and
+  appears only when the model is priced per request: the provider's count
+  rounded up, or one when it reported none. A model priced per token is billed
+  on `total_tokens` instead, and its usage has no `search_units`.
+- `cost_usd` and `pricing_source` are the inline cost described under
+  [Request ID and inline cost](#request-id-and-inline-cost), and are absent when
+  the request was not priced.
+
+How a rerank model is priced, per search unit or per input token, is described in
+[Per-request pricing](configuration.md#per-request-pricing-audio-moderations-rerank-and-completion-models).
 
 ## Search
 
