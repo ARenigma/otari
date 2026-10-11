@@ -4,13 +4,18 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
+import openai
 import pytest
 from any_llm.types.completion import CreateEmbeddingResponse, Embedding, Usage
+from any_llm.utils.exception_handler import convert_exception
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from gateway.api.routes._pipeline import PROVIDER_TIMEOUT_DETAIL
 from gateway.core.config import API_ROOT
+from gateway.core.error_codes import ERROR_CODE_HEADER, UPSTREAM_RATE_LIMITED
 from gateway.metrics import REGISTRY
 from gateway.models.usage import UsageLog
 
@@ -486,3 +491,139 @@ def test_embeddings_response_carries_no_inline_cost_when_unpriced(
     usage = resp.json()["usage"]
     assert "cost_usd" not in usage
     assert "pricing_source" not in usage
+
+
+def _openai_bad_request(message: str) -> Exception:
+    """An OpenAI 400 as any-llm hands it back."""
+    request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+    upstream = openai.BadRequestError(
+        f"Error code: 400 - {{'error': {{'message': '{message}'}}}}",
+        response=httpx.Response(400, request=request),
+        body={"message": message, "type": "invalid_request_error", "param": None, "code": None},
+    )
+    return convert_exception(upstream, "openai")
+
+
+def _error_rows(client: TestClient, master_key_header: dict[str, str], user_id: str) -> list[dict[str, Any]]:
+    usage_resp = client.get(
+        f"{API_ROOT}/usage", params={"user_id": user_id, "endpoint": "/v1/embeddings"}, headers=master_key_header
+    )
+    assert usage_resp.status_code == 200, usage_resp.text
+    return [log for log in usage_resp.json() if log["status"] == "error"]
+
+
+def test_embeddings_upstream_bad_request_is_a_400(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    api_key_header: dict[str, str],
+    api_key_obj: dict[str, Any],
+) -> None:
+    """A provider's 400 is the caller's to fix, so it is not answered as a retryable 502."""
+    with patch(
+        "gateway.api.routes.embeddings.aembedding",
+        new_callable=AsyncMock,
+        side_effect=_openai_bad_request("input cannot be an empty string"),
+    ):
+        resp = client.post(
+            f"{API_ROOT}/embeddings",
+            json={"model": "openai:text-embedding-3-small", "input": [""]},
+            headers=api_key_header,
+        )
+    assert resp.status_code == 400
+    assert "input cannot be an empty string" in resp.json()["detail"]
+
+    rows = _error_rows(client, master_key_header, api_key_obj["user_id"])
+    assert [row["status_code"] for row in rows] == [400]
+
+
+def test_embeddings_param_the_provider_sdk_refuses_is_a_400(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    api_key_header: dict[str, str],
+    api_key_obj: dict[str, Any],
+) -> None:
+    """A param the caller sent that the provider's SDK has no keyword for is named in a 400."""
+    with patch(
+        "gateway.api.routes.embeddings.aembedding",
+        new_callable=AsyncMock,
+        side_effect=TypeError("AsyncV2Client.embed() got an unexpected keyword argument 'encoding_format'"),
+    ):
+        resp = client.post(
+            f"{API_ROOT}/embeddings",
+            json={"model": "openai:text-embedding-3-small", "input": "hello", "encoding_format": "float"},
+            headers=api_key_header,
+        )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "The provider serving this model does not accept the 'encoding_format' parameter"
+
+    rows = _error_rows(client, master_key_header, api_key_obj["user_id"])
+    assert [row["status_code"] for row in rows] == [400]
+
+
+def test_embeddings_keyword_the_caller_did_not_send_stays_a_502(
+    client: TestClient,
+    api_key_header: dict[str, str],
+) -> None:
+    """An unexpected keyword the caller never sent is the gateway's mismatch, not the caller's."""
+    with patch(
+        "gateway.api.routes.embeddings.aembedding",
+        new_callable=AsyncMock,
+        side_effect=TypeError("embed() got an unexpected keyword argument 'encoding_format'"),
+    ):
+        resp = client.post(
+            f"{API_ROOT}/embeddings",
+            json={"model": "openai:text-embedding-3-small", "input": "hello"},
+            headers=api_key_header,
+        )
+    assert resp.status_code == 502
+    assert "encoding_format" not in resp.json()["detail"]
+
+
+def test_embeddings_upstream_rate_limit_is_a_429_with_its_retry_after(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    api_key_header: dict[str, str],
+    api_key_obj: dict[str, Any],
+) -> None:
+    """The provider's rate limit keeps its status and wait, and names itself as the provider's."""
+    request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+    upstream = openai.RateLimitError(
+        "Error code: 429 - Rate limit reached for requests",
+        response=httpx.Response(429, request=request, headers={"Retry-After": "7"}),
+        body={"message": "Rate limit reached for requests"},
+    )
+    with patch(
+        "gateway.api.routes.embeddings.aembedding",
+        new_callable=AsyncMock,
+        side_effect=convert_exception(upstream, "openai"),
+    ):
+        resp = client.post(
+            f"{API_ROOT}/embeddings",
+            json={"model": "openai:text-embedding-3-small", "input": "hello"},
+            headers=api_key_header,
+        )
+    assert resp.status_code == 429
+    assert resp.headers[ERROR_CODE_HEADER] == UPSTREAM_RATE_LIMITED
+    assert resp.headers["Retry-After"] == "7"
+
+    rows = _error_rows(client, master_key_header, api_key_obj["user_id"])
+    assert [row["status_code"] for row in rows] == [429]
+
+
+def test_embeddings_provider_timeout_is_a_504(
+    client: TestClient,
+    api_key_header: dict[str, str],
+) -> None:
+    timeout = openai.APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/embeddings"))
+    with patch(
+        "gateway.api.routes.embeddings.aembedding",
+        new_callable=AsyncMock,
+        side_effect=convert_exception(timeout, "openai"),
+    ):
+        resp = client.post(
+            f"{API_ROOT}/embeddings",
+            json={"model": "openai:text-embedding-3-small", "input": "hello"},
+            headers=api_key_header,
+        )
+    assert resp.status_code == 504
+    assert resp.json()["detail"] == PROVIDER_TIMEOUT_DETAIL

@@ -7,11 +7,13 @@ selector, reserve budget, call the provider, write a usage log, and reconcile
 that scaffold; each route supplies only its endpoint-specific pieces (budget
 estimate, provider call, token extraction, cost computation) as callbacks.
 
-Provider failures are classified with the same helper the hybrid fallback path
-uses (``_classify_upstream_error``) and surface as HTTP 502: an upstream outage
-is an upstream failure, not a gateway bug, matching the chat, messages, and
-responses routes. The raw provider message is never included in the response
-detail (it is preserved on the usage log's ``error_message``).
+Provider failures are classified by ``classify_provider_error``, the helper the
+chat, messages, and responses routes use, so a provider's refusal of the
+caller's request (an upstream 400 or 404, an operation or parameter the provider
+does not support) answers with the same 4xx and redacted detail there, a
+missing or rejected credential with a 424, and an upstream outage with a 502
+whose detail is fixed. The raw provider message is
+preserved on the usage log's ``error_message``.
 
 Every row this scaffold writes comes from one of two places: ``_usage_row`` for
 the outcomes of an attempted provider call (success, provider error), and the
@@ -25,7 +27,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -42,17 +44,20 @@ from gateway.api.routes._pipeline import (
     PROVIDER_CREDENTIALS_DETAIL,
     _elapsed_ms,
     _raise_for_unresolvable_model,
+    classify_provider_error,
     failure_status_code,
     log_gateway_rejection,
+    provider_error_headers,
     rate_limit_headers,
     throttle_early_rejection,
     unresolvable_model_detail,
 )
-from gateway.api.routes._platform import _classify_upstream_error, is_provider_credential_rejection
+from gateway.api.routes._platform import _classify_upstream_error
 from gateway.core.config import GatewayConfig
 from gateway.core.database import release_session
 from gateway.core.error_codes import MODEL_NOT_ALLOWED, PROVIDER_CREDENTIAL_REJECTED, error_headers
 from gateway.core.metered_pricing import billable_usage, price_billable_usage, quantize_cost
+from gateway.core.provider_params import SENSITIVE_PARAM_FIELDS
 from gateway.inflight import track_request
 from gateway.log_config import logger
 from gateway.model_labeling import relabel_model
@@ -72,6 +77,7 @@ from gateway.services.budgets import (
     refund_reservation,
     reserve_budget,
 )
+from gateway.services.catalog import hide_alias_target
 from gateway.services.inference import (
     DecisionProvider,
     DecisionProviderError,
@@ -177,6 +183,7 @@ async def run_passthrough(
     compute_cost: Callable[[ResultT, ModelPricing | None], Decimal | None] | None = None,
     compute_meters: Callable[[ResultT, ModelPricing | None, Decimal], BillingMeters | None] | None = None,
     map_provider_error: Callable[[Exception], HTTPException | None] | None = None,
+    request_params: Collection[str] = (),
     reserve_before_resolve: bool = False,
     relabel: bool = True,
 ) -> PassthroughOutcome[ResultT]:
@@ -230,7 +237,11 @@ async def run_passthrough(
             returned a cost, so a route with no priced unit never needs to guard
             against a missing cost itself.
         map_provider_error: Route-specific provider-exception mapping checked
-            before the generic 502 (the error log and refund happen either way).
+            before the shared classification (the error log and refund happen
+            either way).
+        request_params: The names of the request fields the caller set. A
+            provider SDK refusing one of them as an unexpected keyword answers
+            400 naming it; any other unexpected keyword stays a 502.
         reserve_before_resolve: Preserve the audio routes' historical ordering,
             reserving budget before the selector is resolved. Routes that need
             pricing resolve first (the pricing key is the resolved instance).
@@ -575,7 +586,10 @@ async def run_passthrough(
         await refund_reservation(db, reservation)
         raise
     except Exception as e:
-        await log_writer.put(_usage_row("error", error_message=str(e), status_code=failure_status_code(e)))
+        caller_params = frozenset(request_params) - SENSITIVE_PARAM_FIELDS
+        await log_writer.put(
+            _usage_row("error", error_message=str(e), status_code=failure_status_code(e, request_params=caller_params))
+        )
         await refund_reservation(db, reservation)
 
         missing = missing_credential(e)
@@ -585,19 +599,26 @@ async def run_passthrough(
                 status_code=missing.status_code, detail=missing.detail, headers=error_headers(missing.code)
             ) from e
 
-        if is_provider_credential_rejection(e):
-            logger.warning(
-                "The provider rejected the credential configured for %s:%s", resolved.provider, resolved.model
-            )
-            raise HTTPException(
-                status_code=status.HTTP_424_FAILED_DEPENDENCY,
-                detail=PROVIDER_CREDENTIALS_DETAIL,
-                headers=error_headers(PROVIDER_CREDENTIAL_REJECTED),
-            ) from e
-
         mapped = map_provider_error(e) if map_provider_error else None
         if mapped is not None:
             raise mapped from e
+
+        mapping = classify_provider_error(e, request_params=caller_params)
+        if mapping is not None:
+            logger.warning(
+                "Provider call failed for %s:%s (status %s)", resolved.provider, resolved.model, mapping.status_code
+            )
+            raise HTTPException(
+                status_code=mapping.status_code,
+                detail=hide_alias_target(
+                    mapping.detail,
+                    alias=resolved.alias,
+                    instance=resolved.instance,
+                    model=resolved.model,
+                    dispatch_model=resolved.dispatch_model,
+                ),
+                headers=provider_error_headers(e, mapping.status_code),
+            ) from e
 
         _, error_class = _classify_upstream_error(e)
         logger.error("Provider call failed for %s:%s (%s): %s", resolved.provider, resolved.model, error_class, e)
