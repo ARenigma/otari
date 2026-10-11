@@ -110,8 +110,9 @@ it took, in `Otari-Provider`, `Otari-Attempt-Count`, `Otari-Fallback` and
 [What is billed and what the caller sees](routing.md#what-is-billed-and-what-the-caller-sees).
 
 A priced response also carries its cost on the usage object it already returns,
-as `usage.cost_usd` (a six-decimal USD string) and `usage.pricing_source`. On a
-stream the fields ride the terminal usage event: the last usage chunk for Chat
+as `usage.cost_usd` (a six-decimal USD string) and `usage.pricing_source`. The
+standalone [rerank](#rerank) and embeddings endpoints carry the same two fields
+on their `usage`. On a stream the fields ride the terminal usage event: the last usage chunk for Chat
 Completions, `message_delta` for Messages, and `response.completed` for
 Responses. The two fields always appear together, and an unpriced or
 unreported request carries neither.
@@ -283,13 +284,13 @@ in `usage` what the gateway metered and what it charged:
 ```
 
 - `total_tokens` is the token count the provider reported, or null when it reported none.
-- `search_units` is the number of search units the request was metered at: the
-  provider's count rounded up, or one when the model is priced per request and
-  the provider reported none. It is null when neither applies.
-- `cost_usd` and `pricing_source` are the amount written to the usage record and
-  the rate that priced it, in the format described under
-  [Request ID and inline cost](#request-id-and-inline-cost). Both are null when
-  the request was not priced, rather than absent as on a completion.
+- `search_units` is the number of search units the request was billed for, and
+  appears only when the model is priced per request: the provider's count
+  rounded up, or one when it reported none. A model priced per token is billed
+  on `total_tokens` instead, and its usage has no `search_units`.
+- `cost_usd` and `pricing_source` are the inline cost described under
+  [Request ID and inline cost](#request-id-and-inline-cost), and are absent when
+  the request was not priced.
 
 How a rerank model is priced, per search unit or per input token, is described in
 [Per-request pricing](configuration.md#per-request-pricing-audio-moderations-rerank-and-completion-models).

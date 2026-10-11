@@ -14740,7 +14740,7 @@
         "type": "object"
       },
       "RerankMeta": {
-        "description": "Provider-specific billing metadata (optional, preserved as-is).",
+        "description": "The provider's own billing report, passed through as it sent it.",
         "properties": {
           "billed_units": {
             "anyOf": [
@@ -14844,7 +14844,7 @@
         "type": "object"
       },
       "RerankResponse": {
-        "description": "The provider's rerank results, with the gateway's metered usage.",
+        "description": "Documents ordered by relevance, with the gateway's metered usage.",
         "properties": {
           "id": {
             "anyOf": [
@@ -14866,7 +14866,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "The provider's own billing report, unchanged"
           },
           "model": {
             "anyOf": [
@@ -14877,11 +14878,11 @@
                 "type": "null"
               }
             ],
-            "description": "Model that served the request: the provider-reported one when available, else the requested model",
+            "description": "The model that served the request",
             "title": "Model"
           },
           "results": {
-            "description": "Results sorted by relevance_score descending",
+            "description": "Results sorted by relevance_score, highest first",
             "items": {
               "$ref": "#/components/schemas/RerankResult"
             },
@@ -14900,10 +14901,10 @@
         "type": "object"
       },
       "RerankResult": {
-        "description": "A single document's relevance score.",
+        "description": "One document's relevance to the query.",
         "properties": {
           "index": {
-            "description": "Zero-based index into the original documents list",
+            "description": "Zero-based index into the request's documents",
             "title": "Index",
             "type": "integer"
           },
@@ -14921,7 +14922,7 @@
         "type": "object"
       },
       "RerankUsage": {
-        "description": "What a rerank request was metered at, and what it cost.\n\n``cost_usd`` and ``pricing_source`` follow a completion's inline usage: both\nare set when the request was priced and both are null otherwise.",
+        "description": "What a rerank request was metered at, and what it cost.",
         "properties": {
           "cost_usd": {
             "anyOf": [
@@ -14933,19 +14934,24 @@
                 "type": "null"
               }
             ],
-            "description": "What the request cost, as a six-decimal USD string; null when it was not priced",
+            "description": "What the request cost, as a six-decimal USD string; absent when it was not priced",
             "title": "Cost Usd"
           },
           "pricing_source": {
             "anyOf": [
               {
+                "enum": [
+                  "organization",
+                  "deployment",
+                  "defaults"
+                ],
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Which rate priced the request: organization, deployment or defaults; null when not priced",
+            "description": "Which rate priced the request; absent when it was not priced",
             "title": "Pricing Source"
           },
           "search_units": {
@@ -14957,7 +14963,7 @@
                 "type": "null"
               }
             ],
-            "description": "Search units the request was metered at: the count the provider reported, rounded up, or one for a model priced per request whose provider reported none",
+            "description": "Search units the request was billed for, present only when the model is priced per request: the provider's count rounded up, or one when it reported none",
             "title": "Search Units"
           },
           "total_tokens": {
@@ -14969,7 +14975,7 @@
                 "type": "null"
               }
             ],
-            "description": "Tokens the provider reported, when it reports any",
+            "description": "Tokens the provider reported, or null",
             "title": "Total Tokens"
           }
         },
@@ -35469,7 +35475,7 @@
     },
     "/api/v1/rerank": {
       "post": {
-        "description": "Rerank documents by relevance to a query.\n\nBilling: a model priced per request (``unit: requests``) is charged per\nsearch unit the provider reports, or for one unit when it reports none. A\nmodel priced per token is charged on the input tokens the provider reports.\n\n``usage`` carries what the gateway metered: the provider's tokens, the\nsearch units, and, when the request was priced, ``cost_usd`` and\n``pricing_source`` as a completion's usage does. ``meta`` is the provider's\nown billing report, unchanged.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
+        "description": "Rerank documents by relevance to a query.\n\nBilling: a model priced per request (``unit: requests``) is charged per\nsearch unit the provider reports, or for one unit when it reports none. A\nmodel priced per token is charged on the input tokens the provider reports.\n\n``usage`` carries what the gateway metered: the provider's tokens, the\nsearch units billed when the model is priced per request, and, when the\nrequest was priced, ``cost_usd`` and ``pricing_source`` as a completion's\nusage does. ``meta`` is the provider's own billing report, unchanged.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
         "operationId": "rerank-create_rerank",
         "requestBody": {
           "content": {

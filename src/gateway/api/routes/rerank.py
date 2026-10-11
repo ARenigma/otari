@@ -14,10 +14,11 @@ from gateway.api.routes._passthrough import BillingMeters, run_passthrough
 from gateway.core.config import GatewayConfig
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
-from gateway.schemas.inference import RerankResponse, RerankUsage
+from gateway.schemas.inference import RerankResponse
 from gateway.services.budgets import rerank_estimate
+from gateway.services.inference import rerank_response
 from gateway.services.log_writer import LogWriter
-from gateway.services.pricing_service import billed_search_units, metered_search_units, rerank_cost, rerank_meters
+from gateway.services.pricing_service import billed_search_units, rerank_cost, rerank_meters
 from gateway.services.provider_kwargs import ResolvedProvider
 
 router = APIRouter(tags=["rerank"])
@@ -54,9 +55,9 @@ async def create_rerank(
     model priced per token is charged on the input tokens the provider reports.
 
     ``usage`` carries what the gateway metered: the provider's tokens, the
-    search units, and, when the request was priced, ``cost_usd`` and
-    ``pricing_source`` as a completion's usage does. ``meta`` is the provider's
-    own billing report, unchanged.
+    search units billed when the model is priced per request, and, when the
+    request was priced, ``cost_usd`` and ``pricing_source`` as a completion's
+    usage does. ``meta`` is the provider's own billing report, unchanged.
 
     Authentication modes:
     - Master key + user field: Use specified user (must exist)
@@ -113,15 +114,7 @@ async def create_rerank(
         compute_cost=compute_cost,
         compute_meters=compute_meters,
     )
-    result = outcome.result
-    settlement = outcome.settlement
-    usage = RerankUsage(
-        total_tokens=_total_tokens(result),
-        search_units=metered_search_units(outcome.pricing, result.meta.billed_units if result.meta else None),
-        cost_usd=settlement.cost_usd if settlement is not None else None,
-        pricing_source=settlement.pricing_source if settlement is not None else None,
-    )
-    return RerankResponse(**result.model_dump(exclude={"usage"}), usage=usage)
+    return rerank_response(outcome.result, pricing=outcome.pricing, cost=outcome.cost)
 
 
 def _total_tokens(result: ProviderRerankResponse) -> int | None:

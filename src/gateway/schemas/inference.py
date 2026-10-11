@@ -8,9 +8,9 @@ instead of being dropped here.
 
 from typing import Annotated, Any, Literal
 
-from any_llm.types.rerank import RerankResponse as ProviderRerankResponse
-from any_llm.types.rerank import RerankUsage as ProviderRerankUsage
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from gateway.models.pricing import PriceSource
 
 # Instructions, criteria and state may each be text or structured JSON.
 DecisionContent = str | dict[str, Any] | list[Any]
@@ -135,33 +135,64 @@ class DecisionResponse(BaseModel):
     usage: DecisionUsage | None = None
 
 
-class RerankUsage(ProviderRerankUsage):
-    """What a rerank request was metered at, and what it cost.
+def _is_none(value: object) -> bool:
+    return value is None
 
-    ``cost_usd`` and ``pricing_source`` follow a completion's inline usage: both
-    are set when the request was priced and both are null otherwise.
+
+class InlineCost(BaseModel):
+    """A pass-through response's ``cost_usd`` and ``pricing_source``, the fields a completion's usage carries.
+
+    Both are present when the request was priced and both are left out when it
+    was not, so a caller tells an unpriced request by their absence, as on a
+    completion.
     """
 
-    total_tokens: int | None = Field(default=None, description="Tokens the provider reported, when it reports any")
-    search_units: int | None = Field(
-        default=None,
-        description=(
-            "Search units the request was metered at: the count the provider reported, rounded up, "
-            "or one for a model priced per request whose provider reported none"
-        ),
-    )
     cost_usd: str | None = Field(
         default=None,
         pattern=r"^-?\d+\.\d{6}$",
-        description="What the request cost, as a six-decimal USD string; null when it was not priced",
+        exclude_if=_is_none,
+        description="What the request cost, as a six-decimal USD string; absent when it was not priced",
     )
-    pricing_source: str | None = Field(
+    pricing_source: PriceSource | None = Field(
         default=None,
-        description="Which rate priced the request: organization, deployment or defaults; null when not priced",
+        exclude_if=_is_none,
+        description="Which rate priced the request; absent when it was not priced",
     )
 
 
-class RerankResponse(ProviderRerankResponse):
-    """The provider's rerank results, with the gateway's metered usage."""
+class RerankResult(BaseModel):
+    """One document's relevance to the query."""
 
+    index: int = Field(description="Zero-based index into the request's documents")
+    relevance_score: float = Field(description="Relevance score, higher is more relevant")
+
+
+class RerankMeta(BaseModel):
+    """The provider's own billing report, passed through as it sent it."""
+
+    billed_units: dict[str, float] | None = None
+    tokens: dict[str, int] | None = None
+
+
+class RerankUsage(InlineCost):
+    """What a rerank request was metered at, and what it cost."""
+
+    total_tokens: int | None = Field(default=None, description="Tokens the provider reported, or null")
+    search_units: int | None = Field(
+        default=None,
+        exclude_if=_is_none,
+        description=(
+            "Search units the request was billed for, present only when the model is priced per request: "
+            "the provider's count rounded up, or one when it reported none"
+        ),
+    )
+
+
+class RerankResponse(BaseModel):
+    """Documents ordered by relevance, with the gateway's metered usage."""
+
+    id: str | None = Field(default=None, description="Provider-assigned response ID")
+    model: str | None = Field(default=None, description="The model that served the request")
+    results: list[RerankResult] = Field(description="Results sorted by relevance_score, highest first")
+    meta: RerankMeta | None = Field(default=None, description="The provider's own billing report, unchanged")
     usage: RerankUsage

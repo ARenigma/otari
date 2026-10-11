@@ -182,13 +182,10 @@ def test_billed_search_units_round_up_and_floor_at_one() -> None:
     assert billed_search_units(None) == 1
 
 
-def test_metered_search_units_report_a_count_only_where_one_applies() -> None:
-    # A reported count is metered whatever the rate, rounded up as it is billed.
-    assert metered_search_units(_per_token_pricing(), {"search_units": 1.2}) == 2
-    assert metered_search_units(None, {"search_units": 1.0}) == 1
-    # A per-request rate bills one unit when the provider reported none.
+def test_metered_search_units_are_reported_only_when_billed_per_unit() -> None:
+    # A per-request rate bills the reported count rounded up, or one unit when none is reported.
+    assert metered_search_units(_per_request_pricing(), {"search_units": 1.2}) == 2
     assert metered_search_units(_per_request_pricing(), None) == 1
-    assert metered_search_units(_per_request_pricing(), {"tokens": 5}) == 1
-    # A token rate or no rate, with no reported count, metered no search units.
-    assert metered_search_units(_per_token_pricing(), {"tokens": 5}) is None
-    assert metered_search_units(None, None) is None
+    # A token rate, or no rate, bills no search units whatever the provider counted.
+    assert metered_search_units(_per_token_pricing(), {"search_units": 1.0}) is None
+    assert metered_search_units(None, {"search_units": 1.0}) is None

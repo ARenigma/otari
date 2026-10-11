@@ -4206,9 +4206,9 @@ export interface paths {
          *     model priced per token is charged on the input tokens the provider reports.
          *
          *     ``usage`` carries what the gateway metered: the provider's tokens, the
-         *     search units, and, when the request was priced, ``cost_usd`` and
-         *     ``pricing_source`` as a completion's usage does. ``meta`` is the provider's
-         *     own billing report, unchanged.
+         *     search units billed when the model is priced per request, and, when the
+         *     request was priced, ``cost_usd`` and ``pricing_source`` as a completion's
+         *     usage does. ``meta`` is the provider's own billing report, unchanged.
          *
          *     Authentication modes:
          *     - Master key + user field: Use specified user (must exist)
@@ -13130,7 +13130,7 @@ export interface components {
         };
         /**
          * RerankMeta
-         * @description Provider-specific billing metadata (optional, preserved as-is).
+         * @description The provider's own billing report, passed through as it sent it.
          */
         RerankMeta: {
             /** Billed Units */
@@ -13180,7 +13180,7 @@ export interface components {
         };
         /**
          * RerankResponse
-         * @description The provider's rerank results, with the gateway's metered usage.
+         * @description Documents ordered by relevance, with the gateway's metered usage.
          */
         RerankResponse: {
             /**
@@ -13188,27 +13188,28 @@ export interface components {
              * @description Provider-assigned response ID
              */
             id?: string | null;
+            /** @description The provider's own billing report, unchanged */
             meta?: components["schemas"]["RerankMeta"] | null;
             /**
              * Model
-             * @description Model that served the request: the provider-reported one when available, else the requested model
+             * @description The model that served the request
              */
             model?: string | null;
             /**
              * Results
-             * @description Results sorted by relevance_score descending
+             * @description Results sorted by relevance_score, highest first
              */
             results: components["schemas"]["RerankResult"][];
             usage: components["schemas"]["RerankUsage"];
         };
         /**
          * RerankResult
-         * @description A single document's relevance score.
+         * @description One document's relevance to the query.
          */
         RerankResult: {
             /**
              * Index
-             * @description Zero-based index into the original documents list
+             * @description Zero-based index into the request's documents
              */
             index: number;
             /**
@@ -13220,29 +13221,26 @@ export interface components {
         /**
          * RerankUsage
          * @description What a rerank request was metered at, and what it cost.
-         *
-         *     ``cost_usd`` and ``pricing_source`` follow a completion's inline usage: both
-         *     are set when the request was priced and both are null otherwise.
          */
         RerankUsage: {
             /**
              * Cost Usd
-             * @description What the request cost, as a six-decimal USD string; null when it was not priced
+             * @description What the request cost, as a six-decimal USD string; absent when it was not priced
              */
             cost_usd?: string | null;
             /**
              * Pricing Source
-             * @description Which rate priced the request: organization, deployment or defaults; null when not priced
+             * @description Which rate priced the request; absent when it was not priced
              */
-            pricing_source?: string | null;
+            pricing_source?: ("organization" | "deployment" | "defaults") | null;
             /**
              * Search Units
-             * @description Search units the request was metered at: the count the provider reported, rounded up, or one for a model priced per request whose provider reported none
+             * @description Search units the request was billed for, present only when the model is priced per request: the provider's count rounded up, or one when it reported none
              */
             search_units?: number | null;
             /**
              * Total Tokens
-             * @description Tokens the provider reported, when it reports any
+             * @description Tokens the provider reported, or null
              */
             total_tokens?: number | null;
         };

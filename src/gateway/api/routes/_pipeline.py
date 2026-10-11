@@ -174,7 +174,7 @@ from gateway.models.mcp import McpServerConfig
 from gateway.models.money import to_usd
 from gateway.models.pricing import PriceSource
 from gateway.models.tools import CodeExecutor, ResolvedCodeExecutionPolicy, WebSearchCredential
-from gateway.models.usage import PRICING_REFERENCE_MAX_LENGTH, UsageLog
+from gateway.models.usage import UsageLog
 from gateway.ports.code_execution_policy_port import CodeExecutionPolicyPort, CodeExecutionPolicyScope
 from gateway.ports.code_execution_port import CodeExecutionPort
 from gateway.ports.mcp_server_port import McpServerPort, McpServerScope
@@ -238,6 +238,7 @@ from gateway.services.pricing_service import (
     is_free_pricing,
     no_pricing_error_detail,
     price_tool_calls,
+    pricing_provenance,
     pricing_required_but_missing,
     resolve_model_pricing,
 )
@@ -3686,15 +3687,9 @@ async def record_usage(
             usage_log.cost = cost
             usage_log.billing_meters = meters
             usage_log.pricing_breakdown = breakdown
-            usage_log.pricing_source = resolved.source
-            # A model key is unbounded where the column is not, and an oversized
-            # value would fail the row's insert on PostgreSQL rather than lose a
-            # label, so a key past the limit is recorded as unknown.
-            reference = resolved.reference
-            if reference is not None and len(reference) > PRICING_REFERENCE_MAX_LENGTH:
-                reference = None
-            usage_log.pricing_reference = reference
-            usage_log.pricing_effective_at = resolved.effective_at
+            usage_log.pricing_source, usage_log.pricing_reference, usage_log.pricing_effective_at = pricing_provenance(
+                resolved
+            )
 
     # When the caller bills a fixed amount without provider usage (e.g. the
     # stream-missing-usage estimate policy), record that amount on the log row
