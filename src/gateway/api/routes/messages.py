@@ -45,12 +45,10 @@ from gateway.api.routes._pipeline import (
     DeclaredTools,
     ErrorKind,
     ToolBackends,
-    classify_provider_error,
     default_attempt_kwargs,
     domain_error,
     error_kind_for_status,
     prepare_gateway_tools,
-    provider_error_headers,
     raise_all_streaming_attempts_failed,
     release_reservation,
     resolve_dispatch_provider,
@@ -61,13 +59,7 @@ from gateway.api.routes._pipeline import (
     run_streaming_with_fallback,
     scope_prompt_cache_key,
 )
-from gateway.api.routes._platform import (
-    ResolvedAttempt,
-    SettledCost,
-    _resolve_platform_credentials,
-    upstream_exception_chain,
-    upstream_exception_shape,
-)
+from gateway.api.routes._platform import ResolvedAttempt, SettledCost, _resolve_platform_credentials
 from gateway.api.routes._request_tags import (
     ANTHROPIC_USER_KEY,
     AnthropicRequestMetadata,
@@ -86,6 +78,12 @@ from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
 from gateway.services.code_execution import ContainerLease, check_container_on_credential
 from gateway.services.files import StagedFile
+from gateway.services.inference import (
+    classify_provider_error,
+    provider_error_headers,
+    upstream_exception_chain,
+    upstream_exception_shape,
+)
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import ToolBackend
 from gateway.services.mcp_loop_messages import (

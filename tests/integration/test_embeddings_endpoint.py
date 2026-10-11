@@ -13,11 +13,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from gateway.api.routes._pipeline import PROVIDER_TIMEOUT_DETAIL
 from gateway.core.config import API_ROOT
 from gateway.core.error_codes import ERROR_CODE_HEADER, UPSTREAM_RATE_LIMITED
 from gateway.metrics import REGISTRY
 from gateway.models.usage import UsageLog
+from gateway.services.inference import PROVIDER_TIMEOUT_DETAIL
 
 
 def _mock_embedding_response(prompt_tokens: int = 10) -> CreateEmbeddingResponse:

@@ -1,4 +1,4 @@
-"""The inference domain: idempotent completion requests, structured decisions and dialect bridges."""
+"""The inference domain: idempotent completion requests, structured decisions, dialect bridges and provider failures."""
 
 from gateway.services.inference._decisions import (
     DecisionProvider,
@@ -25,6 +25,23 @@ from gateway.services.inference._idempotency import (
 )
 from gateway.services.inference._lease import keep_claim_alive
 from gateway.services.inference._passthrough_responses import PassthroughResponseService
+from gateway.services.inference._provider_errors import (
+    PROVIDER_ACCOUNT_QUOTA_DETAIL,
+    PROVIDER_BAD_REQUEST_DETAIL,
+    PROVIDER_BILLING_DETAIL,
+    PROVIDER_CREDENTIALS_DETAIL,
+    PROVIDER_MODEL_NOT_FOUND_DETAIL,
+    PROVIDER_RATE_LIMITED_DETAIL,
+    PROVIDER_TIMEOUT_DETAIL,
+    ProviderErrorMapping,
+    classify_provider_error,
+    failure_status_code,
+    provider_error_headers,
+    redacted_upstream_detail,
+    refusal_code,
+    stream_error_code,
+    stream_error_message,
+)
 from gateway.services.inference._responses_bridge import (
     REASONING_ITEM_ID_PREFIX,
     aresponses_via_chat_completions,
@@ -34,8 +51,24 @@ from gateway.services.inference._responses_bridge import (
 )
 from gateway.services.inference._responses_input import strip_gateway_minted_items
 from gateway.services.inference._sweeper import run_idempotency_sweeper
+from gateway.services.inference._upstream_errors import (
+    UpstreamErrorKind,
+    is_provider_billing_error,
+    is_provider_credential_rejection,
+    upstream_error_message,
+    upstream_exception_chain,
+    upstream_exception_shape,
+    upstream_retry_after,
+)
 
 __all__ = [
+    "PROVIDER_ACCOUNT_QUOTA_DETAIL",
+    "PROVIDER_BAD_REQUEST_DETAIL",
+    "PROVIDER_BILLING_DETAIL",
+    "PROVIDER_CREDENTIALS_DETAIL",
+    "PROVIDER_MODEL_NOT_FOUND_DETAIL",
+    "PROVIDER_RATE_LIMITED_DETAIL",
+    "PROVIDER_TIMEOUT_DETAIL",
     "REASONING_ITEM_ID_PREFIX",
     "Admission",
     "BlockedCaller",
@@ -48,20 +81,35 @@ __all__ = [
     "InvalidKey",
     "KeyReused",
     "PassthroughResponseService",
+    "ProviderErrorMapping",
     "Replay",
     "StillInFlight",
-    "UnknownDecisionProviderError",
     "UnknownCaller",
+    "UnknownDecisionProviderError",
+    "UpstreamErrorKind",
     "aresponses_via_chat_completions",
     "call_responses",
+    "classify_provider_error",
     "close_decision_client",
     "decision_body",
+    "failure_status_code",
+    "is_provider_billing_error",
+    "is_provider_credential_rejection",
     "keep_claim_alive",
+    "provider_error_headers",
+    "redacted_upstream_detail",
+    "refusal_code",
     "reported_charge",
     "request_decision",
     "resolve_decision_provider",
     "run_idempotency_sweeper",
     "serves_responses",
+    "stream_error_code",
+    "stream_error_message",
     "strip_gateway_minted_items",
+    "upstream_error_message",
+    "upstream_exception_chain",
+    "upstream_exception_shape",
+    "upstream_retry_after",
     "uses_chat_completions_bridge",
 ]

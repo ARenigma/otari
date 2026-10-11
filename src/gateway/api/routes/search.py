@@ -61,13 +61,7 @@ from gateway.api.routes._passthrough import (
     PASSTHROUGH_PROVIDER_ERROR_DETAIL,
     resolve_passthrough_user_id,
 )
-from gateway.api.routes._pipeline import (
-    _elapsed_ms,
-    _names_end_user,
-    failure_status_code,
-    log_gateway_rejection,
-    rate_limit_headers,
-)
+from gateway.api.routes._pipeline import _elapsed_ms, _names_end_user, log_gateway_rejection, rate_limit_headers
 from gateway.core.config import END_USER_BUDGET_HEADER, GatewayConfig
 from gateway.core.metered_pricing import quantize_cost
 from gateway.exceptions.tools_exceptions import WebSearchNotEnabledError, WebSearchPolicyResolutionFailure
@@ -83,6 +77,7 @@ from gateway.services.budgets import (
     refund_reservation,
     reserve_budget,
 )
+from gateway.services.inference import failure_status_code
 from gateway.services.log_writer import LogWriter
 from gateway.services.model_access import is_model_allowed, model_not_allowed_detail, resolve_request_allowlist
 from gateway.services.pricing_service import find_model_pricing, flat_request_cost

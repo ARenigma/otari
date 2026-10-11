@@ -76,7 +76,7 @@ def redact_upstream_message(message: str) -> str:
 
     Redaction is the second line rather than the only one. Statuses where
     secrets concentrate (a rejected credential, a 5xx) never reach here at all,
-    because :func:`gateway.api.routes._pipeline.classify_provider_error` keeps a
+    because :func:`gateway.services.inference.classify_provider_error` keeps a
     fixed detail for them.
     """
     redacted = message.strip()

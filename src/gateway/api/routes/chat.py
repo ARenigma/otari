@@ -33,11 +33,9 @@ from gateway.api.routes._pipeline import (
     DeclaredTools,
     ErrorKind,
     ToolBackends,
-    classify_provider_error,
     default_attempt_kwargs,
     log_usage,
     prepare_gateway_tools,
-    provider_error_headers,
     raise_all_streaming_attempts_failed,
     rate_limit_headers,
     resolve_dispatch_provider,
@@ -64,6 +62,7 @@ from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.provider_fields import surface_provider_fields
 from gateway.services.files import FileService, StagedFile
+from gateway.services.inference import classify_provider_error, provider_error_headers
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import (
     MAX_TOOL_ITERATIONS_CAP,

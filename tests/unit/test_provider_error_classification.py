@@ -31,8 +31,11 @@ from botocore.exceptions import ClientError
 from fastapi import HTTPException
 from openai import APITimeoutError as OpenAIAPITimeoutError
 
-from gateway.api.routes._pipeline import (
-    _FORWARDED_PARAMS,
+from gateway.api.routes._pipeline import stream_error_code, stream_error_message
+from gateway.api.routes._platform import _provider_failure_http_exc, get_shared_rejection
+from gateway.core.error_codes import PROVIDER_CREDENTIAL_REJECTED, PROVIDER_NOT_CONFIGURED
+from gateway.core.provider_params import SENSITIVE_PARAM_FIELDS
+from gateway.services.inference import (
     PROVIDER_ACCOUNT_QUOTA_DETAIL,
     PROVIDER_BAD_REQUEST_DETAIL,
     PROVIDER_BILLING_DETAIL,
@@ -44,12 +47,9 @@ from gateway.api.routes._pipeline import (
     failure_status_code,
     provider_error_headers,
     refusal_code,
-    stream_error_code,
-    stream_error_message,
+    upstream_retry_after,
 )
-from gateway.api.routes._platform import _provider_failure_http_exc, get_shared_rejection, upstream_retry_after
-from gateway.core.error_codes import PROVIDER_CREDENTIAL_REJECTED, PROVIDER_NOT_CONFIGURED
-from gateway.core.provider_params import SENSITIVE_PARAM_FIELDS
+from gateway.services.inference._provider_errors import _FORWARDED_PARAMS
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
 from gateway.services.provider_kwargs import MissingCredential
 from gateway.services.upstream_redaction import MAX_EXPOSED_DETAIL_CHARS, redact_upstream_message

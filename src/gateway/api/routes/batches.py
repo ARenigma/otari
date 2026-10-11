@@ -18,12 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db, get_log_writer, verify_api_key_or_master_key
 from gateway.api.routes._helpers import resolve_user_id
-from gateway.api.routes._pipeline import (
-    PROVIDER_CREDENTIALS_DETAIL,
-    _raise_for_unresolvable_model,
-    failure_status_code,
-)
-from gateway.api.routes._platform import is_provider_credential_rejection
+from gateway.api.routes._pipeline import _raise_for_unresolvable_model
 from gateway.api.routes.chat import rate_limit_headers
 from gateway.core.config import GatewayConfig
 from gateway.core.error_codes import MODEL_NOT_ALLOWED, PROVIDER_CREDENTIAL_REJECTED, error_headers
@@ -46,6 +41,11 @@ from gateway.services.budgets import (
     record_external_spend,
     refund_reservation,
     reserve_budget,
+)
+from gateway.services.inference import (
+    PROVIDER_CREDENTIALS_DETAIL,
+    failure_status_code,
+    is_provider_credential_rejection,
 )
 from gateway.services.log_writer import LogWriter
 from gateway.services.model_access import (

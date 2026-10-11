@@ -20,11 +20,11 @@ from any_llm.utils.exception_handler import convert_exception
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from gateway.api.routes._pipeline import PROVIDER_CREDENTIALS_DETAIL
 from gateway.core.config import API_KEY_HEADER, API_ROOT, GatewayConfig
 from gateway.core.error_codes import ERROR_CODE_HEADER, PROVIDER_CREDENTIAL_REJECTED
 from gateway.models.routing import RoutingConfig
 from gateway.models.usage import UsageLog
+from gateway.services.inference import PROVIDER_CREDENTIALS_DETAIL
 
 from .conftest import build_test_client
 

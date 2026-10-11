@@ -35,9 +35,7 @@ from gateway.api.routes._pipeline import (
     ToolBackends,
     _flush_pending_usage_reports,
     _PendingUsageReport,
-    classify_provider_error,
     prepare_gateway_tools,
-    provider_error_headers,
     raise_all_streaming_attempts_failed,
     release_reservation,
     resolve_dispatch_provider,
@@ -60,7 +58,13 @@ from gateway.core.usage import GatewayUsage
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
 from gateway.services.files import StagedFile
-from gateway.services.inference import call_responses, serves_responses, strip_gateway_minted_items
+from gateway.services.inference import (
+    call_responses,
+    classify_provider_error,
+    provider_error_headers,
+    serves_responses,
+    strip_gateway_minted_items,
+)
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import ToolBackend
 from gateway.services.mcp_loop_responses import (

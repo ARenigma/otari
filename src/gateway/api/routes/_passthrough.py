@@ -41,13 +41,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import ContainerDep, get_config, get_db, get_log_writer
 from gateway.api.routes._helpers import resolve_user_id
 from gateway.api.routes._pipeline import (
-    PROVIDER_CREDENTIALS_DETAIL,
     _elapsed_ms,
     _raise_for_unresolvable_model,
-    classify_provider_error,
-    failure_status_code,
     log_gateway_rejection,
-    provider_error_headers,
     rate_limit_headers,
     throttle_early_rejection,
     unresolvable_model_detail,
@@ -79,10 +75,14 @@ from gateway.services.budgets import (
 )
 from gateway.services.catalog import hide_alias_target
 from gateway.services.inference import (
+    PROVIDER_CREDENTIALS_DETAIL,
     DecisionProvider,
     DecisionProviderError,
     UnknownDecisionProviderError,
+    classify_provider_error,
     decision_body,
+    failure_status_code,
+    provider_error_headers,
     reported_charge,
     request_decision,
     resolve_decision_provider,

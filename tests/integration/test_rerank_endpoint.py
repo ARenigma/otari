@@ -9,8 +9,8 @@ from any_llm.utils.exception_handler import convert_exception
 from cohere.errors import BadRequestError as CohereBadRequestError
 from fastapi.testclient import TestClient
 
-from gateway.api.routes._pipeline import PROVIDER_BAD_REQUEST_DETAIL
 from gateway.core.config import API_ROOT
+from gateway.services.inference import PROVIDER_BAD_REQUEST_DETAIL
 
 
 def _mock_rerank_response() -> RerankResponse:

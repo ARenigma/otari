@@ -14,12 +14,9 @@ import pytest
 from any_llm.exceptions import UnsupportedParameterError
 from fastapi.testclient import TestClient
 
-from gateway.api.routes._pipeline import (
-    PROVIDER_CREDENTIALS_DETAIL,
-    PROVIDER_ERROR_DETAIL,
-    PROVIDER_RATE_LIMITED_DETAIL,
-)
+from gateway.api.routes._pipeline import PROVIDER_ERROR_DETAIL
 from gateway.core.config import API_ROOT
+from gateway.services.inference import PROVIDER_CREDENTIALS_DETAIL, PROVIDER_RATE_LIMITED_DETAIL
 
 _RAW = "raw upstream message SECRET-9f3a"
 

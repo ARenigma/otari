@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from gateway.api.routes._pipeline import PROVIDER_BAD_REQUEST_DETAIL
 from gateway.core.config import API_ROOT
+from gateway.services.inference import PROVIDER_BAD_REQUEST_DETAIL
 
 
 def test_provider_error_does_not_leak_details(

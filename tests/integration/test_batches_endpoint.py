@@ -16,9 +16,9 @@ from fastapi.testclient import TestClient
 from openai.types.batch import Batch
 from openai.types.batch_request_counts import BatchRequestCounts
 
-from gateway.api.routes._pipeline import PROVIDER_CREDENTIALS_DETAIL
 from gateway.core.config import API_KEY_HEADER, API_ROOT
 from gateway.core.error_codes import ERROR_CODE_HEADER, PROVIDER_CREDENTIAL_REJECTED
+from gateway.services.inference import PROVIDER_CREDENTIALS_DETAIL
 
 from .test_rate_limiting import _make_rate_limit_client
 
