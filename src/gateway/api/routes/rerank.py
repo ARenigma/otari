@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import get_config, get_db, get_log_writer, verify_api_key_or_master_key
 from gateway.api.routes._passthrough import BillingMeters, run_passthrough
-from gateway.api.routes._pipeline import standalone_settlement
 from gateway.core.config import GatewayConfig
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
@@ -115,7 +114,7 @@ async def create_rerank(
         compute_meters=compute_meters,
     )
     result = outcome.result
-    settlement = standalone_settlement(outcome.logged)
+    settlement = outcome.settlement
     usage = RerankUsage(
         total_tokens=_total_tokens(result),
         search_units=metered_search_units(outcome.pricing, result.meta.billed_units if result.meta else None),

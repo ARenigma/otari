@@ -45,10 +45,11 @@ from gateway.api.routes._pipeline import (
     failure_status_code,
     log_gateway_rejection,
     rate_limit_headers,
+    standalone_settlement,
     throttle_early_rejection,
     unresolvable_model_detail,
 )
-from gateway.api.routes._platform import _classify_upstream_error
+from gateway.api.routes._platform import SettledCost, _classify_upstream_error
 from gateway.core.config import GatewayConfig
 from gateway.core.database import release_session
 from gateway.core.error_codes import MODEL_NOT_ALLOWED, error_headers
@@ -153,6 +154,11 @@ class PassthroughOutcome(Generic[ResultT]):
     """The rate the request was priced at, if one was found."""
     logged: LoggedUsage = LoggedUsage(None, None)
     """The cost written to the usage row and the rate's source, as :func:`record_usage` reports them."""
+
+    @property
+    def settlement(self) -> SettledCost | None:
+        """The inline ``cost_usd`` and ``pricing_source`` for the response, or ``None`` when unpriced."""
+        return standalone_settlement(self.logged)
 
 
 async def run_passthrough(
