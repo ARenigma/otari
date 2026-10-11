@@ -319,6 +319,7 @@ from gateway.streaming import (
     IncompleteStreamError,
     StreamFormat,
     StreamingAttemptFailure,
+    hold_for_first_chunk,
     iterate_streaming_attempts,
     merge_stream_usage,
     streaming_generator,
@@ -782,14 +783,29 @@ def stream_error_code(exc: BaseException) -> str | None:
 
     The refusal's own code where it has one, otherwise ``provider_error`` for any
     failure the provider caused, so a client can tell a provider failure from the
-    gateway's own without reading the message.
+    gateway's own without reading the message. A failure
+    :func:`classify_provider_error` recognizes counts as the provider's even
+    when it carries no status, such as a parameter the provider's SDK refused.
     """
     code = refusal_code(exc)
     if code is not None or isinstance(exc, HTTPException):
         return code
-    if _is_upstream_failure(exc):
+    if _is_upstream_failure(exc) or classify_provider_error(exc) is not None:
         return PROVIDER_ERROR
     return None
+
+
+def stream_error_message(exc: BaseException) -> str | None:
+    """The message of the event that ends a stream on ``exc``, or None for the format's fixed one.
+
+    The detail the same failure gets as an HTTP error, where
+    :func:`classify_provider_error` gives it one, since that detail is already
+    safe for the caller to read.
+    """
+    if isinstance(exc, HTTPException):
+        return None
+    mapping = classify_provider_error(exc)
+    return mapping.detail if mapping is not None else None
 
 
 def _is_upstream_failure(exc: BaseException) -> bool:
@@ -4274,6 +4290,9 @@ async def open_stream(
 ) -> AsyncIterator[ChunkT]:
     """Open the upstream stream for a single-attempt streaming request.
 
+    A provider stream is held for its first chunk (:func:`hold_for_first_chunk`),
+    so a provider failure before any output raises here.
+
     The sandbox and web_search backends are opened eagerly (their
     ``__aenter__`` runs before this function returns) so a backend-unreachable
     error surfaces as an HTTP 502 rather than landing in the SSE channel after
@@ -4283,7 +4302,7 @@ async def open_stream(
     kwargs = adapter.prepare_stream_kwargs(call_kwargs)
 
     if not tool_ctx.use_tool_loop:
-        return await adapter.open_provider_stream(kwargs)
+        return await hold_for_first_chunk(await adapter.open_provider_stream(kwargs), tool_ctx.config)
 
     if tool_ctx.mcp_server_configs:
         return _lazy_mcp_stream(adapter, kwargs, tool_ctx.mcp_server_configs, tool_ctx)
@@ -4927,18 +4946,18 @@ async def run_single_attempt_stream(
     cases any budget reservation is refunded before the error surfaces.
 
     With a multi-candidate ``ctx.plan``, the *open* is what walks the candidates.
-    That is the honest boundary for streaming failover: nothing has been flushed
-    to the client yet, so trying the next provider is transparent. Once the
-    stream is open, a failure mid-body cannot fall over, because the client has
-    already received part of a response from a different model; those errors
-    propagate, exactly as they do today.
+    The open includes :func:`open_stream`'s wait for the first chunk, so a
+    provider that fails before any output falls over too. That is the honest
+    boundary for streaming failover: nothing has been flushed to the client yet,
+    so trying the next provider is transparent. Once the stream is committed, a
+    failure mid-body cannot fall over, because the client has already received
+    part of a response from a different model; those errors end the stream in an
+    error event.
 
     Deliberately not included: falling over because the first *chunk* was slow.
-    That needs a peek-with-deadline around the body, and the deadline it would
-    have to apply is the one that has never applied to standalone streams (see
-    the first-chunk regression test). Open-time failover covers the common
-    provider blip (connection refused, 429, 5xx on connect) without touching
-    that behavior.
+    The wait for it has no deadline that fails the attempt; when it outlasts
+    ``streaming_first_chunk_hold_ms`` the stream is committed and keeps waiting
+    (see the first-chunk regression test).
     """
     try:
         if ctx.plan is not None and len(ctx.plan.attempts) > 1 and base_request_fields is not None:
