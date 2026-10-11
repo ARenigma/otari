@@ -116,13 +116,14 @@ async def create_rerank(
         compute_meters=compute_meters,
     )
     result = outcome.result
-    reported_units = result.meta is not None and result.meta.billed_units is not None
+    billed_units = result.meta.billed_units if result.meta else None
+    reported_units = billed_units is not None and billed_units.get("search_units") is not None
     settlement = standalone_settlement(outcome.logged)
     usage = RerankUsage(
         total_tokens=_total_tokens(result),
         search_units=_search_units(result) if reported_units or priced_per_request(outcome.pricing) else None,
-        cost_usd=settlement.cost_usd if settlement else None,
-        pricing_source=settlement.pricing_source if settlement else None,
+        cost_usd=settlement.cost_usd if settlement is not None else None,
+        pricing_source=settlement.pricing_source if settlement is not None else None,
     )
     return RerankResponse(**result.model_dump(exclude={"usage"}), usage=usage)
 
