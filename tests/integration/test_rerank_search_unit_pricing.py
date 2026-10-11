@@ -116,11 +116,18 @@ def test_reported_search_units_are_billed_at_the_per_request_rate(
 
     assert response.status_code == 200, response.text
     assert response.json()["meta"]["billed_units"] == {"search_units": 2.0}
+    assert response.json()["usage"] == {
+        "total_tokens": None,
+        "search_units": 2,
+        "cost_usd": "0.004000",
+        "pricing_source": "deployment",
+    }
     # One unit is held up front; the provider's count settles the rest.
     assert reserved == [UNIT_COST]
     row = _row(db_session_factory)
     assert row.status == "success"
     assert row.cost == Decimal("0.004")
+    assert row.pricing_source == "deployment"
     assert row.billing_meters == {"search_units": 2}
     assert row.pricing_breakdown == [{"meter": "search_units", "units": 2, "unit_rate": 0.002, "cost": 0.004}]
     assert (row.prompt_tokens, row.total_tokens) == (None, None)
@@ -138,6 +145,8 @@ def test_a_provider_reporting_no_units_is_billed_one(
     response, _ = _rerank(client, headers, _response(search_units=None))
 
     assert response.status_code == 200, response.text
+    usage = response.json()["usage"]
+    assert (usage["search_units"], usage["cost_usd"]) == (1, "0.002000")
     row = _row(db_session_factory)
     assert row.cost == UNIT_COST
     assert row.billing_meters == {"search_units": 1}
@@ -152,6 +161,12 @@ def test_a_token_priced_model_still_bills_reported_tokens(
     response, _ = _rerank(client, headers, _response(search_units=1.0, tokens=1000))
 
     assert response.status_code == 200, response.text
+    assert response.json()["usage"] == {
+        "total_tokens": 1000,
+        "search_units": 1,
+        "cost_usd": "0.003000",
+        "pricing_source": "deployment",
+    }
     row = _row(db_session_factory)
     assert row.cost == Decimal("0.003")
     assert row.prompt_tokens == 1000
@@ -168,7 +183,31 @@ def test_a_token_priced_model_with_only_search_units_stays_unpriced(
     response, _ = _rerank(client, headers, _response(search_units=1.0))
 
     assert response.status_code == 200, response.text
+    assert response.json()["usage"] == {
+        "total_tokens": None,
+        "search_units": 1,
+        "cost_usd": None,
+        "pricing_source": None,
+    }
     row = _row(db_session_factory)
     assert row.status == "success"
     assert row.cost is None
     assert row.billing_meters is None
+    assert row.pricing_source is None
+
+
+def test_an_unpriced_model_reports_its_usage_with_no_cost(
+    client: TestClient, master_key_header: dict[str, str], db_session_factory: Callable[[], Session]
+) -> None:
+    """With no rate at all, the response still says what was metered, and that nothing was priced."""
+    headers = _user_key(client, master_key_header)
+
+    response, _ = _rerank(client, headers, _response(search_units=None, tokens=50))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["usage"] == {"total_tokens": 50, "search_units": None, "cost_usd": None, "pricing_source": None}
+    assert body["meta"] == {"billed_units": None, "tokens": None}
+    row = _row(db_session_factory)
+    assert row.cost is None
+    assert row.total_tokens == 50

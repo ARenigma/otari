@@ -266,6 +266,34 @@ the gateway stops after the provider answers and before the response is stored,
 or the database stays unreachable for about `idempotency_lease_sec` while the
 original runs, so its claim lapses and a retry takes it over.
 
+## Rerank
+
+`POST /api/v1/rerank` orders a list of documents by relevance to a query. The
+response keeps the provider's own billing report in `meta`, unchanged, and says
+in `usage` what the gateway metered and what it charged:
+
+```json
+{
+  "id": "…",
+  "model": "rerank-v3.5",
+  "results": [{"index": 0, "relevance_score": 0.86}],
+  "meta": {"billed_units": {"search_units": 1.0}, "tokens": null},
+  "usage": {"total_tokens": null, "search_units": 1, "cost_usd": "0.002000", "pricing_source": "deployment"}
+}
+```
+
+- `total_tokens` is the token count the provider reported, or null when it reported none.
+- `search_units` is the number of search units the request was metered at: the
+  provider's count rounded up, or one when the model is priced per request and
+  the provider reported none. It is null when neither applies.
+- `cost_usd` and `pricing_source` are the amount written to the usage record and
+  the rate that priced it, in the format described under
+  [Request ID and inline cost](#request-id-and-inline-cost). Both are null when
+  the request was not priced, rather than absent as on a completion.
+
+How a rerank model is priced, per search unit or per input token, is described in
+[Per-request pricing](configuration.md#per-request-pricing-audio-moderations-rerank-and-completion-models).
+
 ## Search
 
 `POST /api/v1/search` and `POST /api/v1/search/{search_tool_name}` run a configured

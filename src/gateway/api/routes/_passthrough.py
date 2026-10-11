@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import ContainerDep, get_config, get_db, get_log_writer
 from gateway.api.routes._helpers import resolve_user_id
 from gateway.api.routes._pipeline import (
+    LoggedUsage,
     _elapsed_ms,
     _raise_for_unresolvable_model,
     failure_status_code,
@@ -56,7 +57,7 @@ from gateway.inflight import track_request
 from gateway.log_config import logger
 from gateway.model_labeling import relabel_model
 from gateway.models.api_keys import APIKey
-from gateway.models.pricing import ModelPricing
+from gateway.models.pricing import ModelPricing, PriceSource
 from gateway.models.usage import UsageLog
 from gateway.ports.billing_port import BillingPort, InsufficientFundsError
 from gateway.rate_limit import check_rate_limit
@@ -91,6 +92,7 @@ from gateway.services.pricing_service import (
     find_model_pricing,
     no_pricing_error_detail,
     pricing_required_but_missing,
+    resolve_model_pricing,
 )
 from gateway.services.provider_kwargs import ResolvedProvider, missing_credential, resolve_provider_selector
 from gateway.services.workspace_scope import organization_for_workspace_id, resolve_workspace_id
@@ -147,6 +149,10 @@ class PassthroughOutcome(Generic[ResultT]):
     """The resolved selector the call was dispatched against."""
     headers: dict[str, str]
     """Rate-limit headers for routes that build their own response object."""
+    pricing: ModelPricing | None = None
+    """The rate the request was priced at, if one was found."""
+    logged: LoggedUsage = LoggedUsage(None, None)
+    """The cost written to the usage row and the rate's source, as :func:`record_usage` reports them."""
 
 
 async def run_passthrough(
@@ -335,7 +341,19 @@ async def run_passthrough(
                 )
             raise
 
+    async def _lookup_pricing(target: ResolvedProvider) -> tuple[ModelPricing | None, PriceSource | None]:
+        """The rate for ``target`` and which rung of the price list supplied it."""
+        found = await resolve_model_pricing(
+            db,
+            target.instance,
+            target.model,
+            use_defaults=pricing_use_defaults,
+            organization_id=organization_id,
+        )
+        return (found.pricing, found.source) if found is not None else (None, None)
+
     pricing: ModelPricing | None = None
+    pricing_source: PriceSource | None = None
     if reserve_before_resolve:
         # Nothing is resolved yet, so a rejection here records the requested
         # selector with no provider.
@@ -361,13 +379,7 @@ async def run_passthrough(
             # Unlike the branch below, the reservation is already held here, so a
             # failed lookup must refund before propagating or the estimate leaks.
             try:
-                pricing = await find_model_pricing(
-                    db,
-                    resolved.instance,
-                    resolved.model,
-                    use_defaults=pricing_use_defaults,
-                    organization_id=organization_id,
-                )
+                pricing, pricing_source = await _lookup_pricing(resolved)
             except Exception:
                 # The realistic failure is a DB error, which leaves the session
                 # needing a rollback: without one the refund's own UPDATE raises
@@ -390,13 +402,7 @@ async def run_passthrough(
             )
             _raise_for_unresolvable_model(model, exc)
         if lookup_pricing:
-            pricing = await find_model_pricing(
-                db,
-                resolved.instance,
-                resolved.model,
-                use_defaults=pricing_use_defaults,
-                organization_id=organization_id,
-            )
+            pricing, pricing_source = await _lookup_pricing(resolved)
         # Reserve first so user/blocked/budget rejections (404/403) precede the
         # missing-pricing rejection (402); refund if we then reject for no pricing.
         reservation = await _reserve(
@@ -536,6 +542,7 @@ async def run_passthrough(
         cost = quantize_cost(raw_cost) if raw_cost is not None else None
         if cost is not None and raw_cost is not None:
             usage_log.cost = cost
+            usage_log.pricing_source = pricing_source
             # The charge lines get the unrounded amount, the same way the token
             # path's do: the column is the amount, the lines explain it.
             billing = compute_meters(result, pricing, raw_cost) if compute_meters else None
@@ -587,7 +594,13 @@ async def run_passthrough(
     if relabel and resolved.alias is not None:
         relabel_model(result, resolved.alias)
 
-    return PassthroughOutcome(result=result, resolved=resolved, headers=headers)
+    return PassthroughOutcome(
+        result=result,
+        resolved=resolved,
+        headers=headers,
+        pricing=pricing,
+        logged=LoggedUsage(cost, pricing_source if cost is not None else None),
+    )
 
 
 DECISIONS_ENDPOINT = "/v1/decisions"

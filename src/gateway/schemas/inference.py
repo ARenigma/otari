@@ -1,6 +1,6 @@
-"""Request and response models of the inference domain's decisions endpoint.
+"""Request and response models of the inference domain's decisions and rerank endpoints.
 
-The shape is TypeSafe's ``/v1/systemone``, which OpenRouter's alpha Decisions
+The decisions shape is TypeSafe's ``/v1/systemone``, which OpenRouter's alpha Decisions
 API also takes, so either provider's SDK can point at the gateway. Questions and
 answers allow extra fields, so a field a provider adds later reaches the caller
 instead of being dropped here.
@@ -8,6 +8,8 @@ instead of being dropped here.
 
 from typing import Annotated, Any, Literal
 
+from any_llm.types.rerank import RerankResponse as ProviderRerankResponse
+from any_llm.types.rerank import RerankUsage as ProviderRerankUsage
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Instructions, criteria and state may each be text or structured JSON.
@@ -131,3 +133,35 @@ class DecisionResponse(BaseModel):
     model: str
     answers: dict[str, DecisionAnswer]
     usage: DecisionUsage | None = None
+
+
+class RerankUsage(ProviderRerankUsage):
+    """What a rerank request was metered at, and what it cost.
+
+    ``cost_usd`` and ``pricing_source`` follow a completion's inline usage: both
+    are set when the request was priced and both are null otherwise.
+    """
+
+    total_tokens: int | None = Field(default=None, description="Tokens the provider reported, when it reports any")
+    search_units: int | None = Field(
+        default=None,
+        description=(
+            "Search units the request was metered at: the count the provider reported, rounded up, "
+            "or one for a model priced per request whose provider reported none"
+        ),
+    )
+    cost_usd: str | None = Field(
+        default=None,
+        pattern=r"^-?\d+\.\d{6}$",
+        description="What the request cost, as a six-decimal USD string; null when it was not priced",
+    )
+    pricing_source: str | None = Field(
+        default=None,
+        description="Which rate priced the request: organization, deployment or defaults; null when not priced",
+    )
+
+
+class RerankResponse(ProviderRerankResponse):
+    """The provider's rerank results, with the gateway's metered usage."""
+
+    usage: RerankUsage

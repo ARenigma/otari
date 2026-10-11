@@ -4205,6 +4205,11 @@ export interface paths {
          *     search unit the provider reports, or for one unit when it reports none. A
          *     model priced per token is charged on the input tokens the provider reports.
          *
+         *     ``usage`` carries what the gateway metered: the provider's tokens, the
+         *     search units, and, when the request was priced, ``cost_usd`` and
+         *     ``pricing_source`` as a completion's usage does. ``meta`` is the provider's
+         *     own billing report, unchanged.
+         *
          *     Authentication modes:
          *     - Master key + user field: Use specified user (must exist)
          *     - API key + user field: Use specified user (must exist)
@@ -13124,6 +13129,20 @@ export interface components {
             parameters: string[];
         };
         /**
+         * RerankMeta
+         * @description Provider-specific billing metadata (optional, preserved as-is).
+         */
+        RerankMeta: {
+            /** Billed Units */
+            billed_units?: {
+                [key: string]: number;
+            } | null;
+            /** Tokens */
+            tokens?: {
+                [key: string]: number;
+            } | null;
+        };
+        /**
          * RerankRequest
          * @description Rerank request.
          */
@@ -13158,6 +13177,74 @@ export interface components {
              * @description User ID for usage attribution
              */
             user?: string | null;
+        };
+        /**
+         * RerankResponse
+         * @description The provider's rerank results, with the gateway's metered usage.
+         */
+        RerankResponse: {
+            /**
+             * Id
+             * @description Provider-assigned response ID
+             */
+            id?: string | null;
+            meta?: components["schemas"]["RerankMeta"] | null;
+            /**
+             * Model
+             * @description Model that served the request: the provider-reported one when available, else the requested model
+             */
+            model?: string | null;
+            /**
+             * Results
+             * @description Results sorted by relevance_score descending
+             */
+            results: components["schemas"]["RerankResult"][];
+            usage: components["schemas"]["RerankUsage"];
+        };
+        /**
+         * RerankResult
+         * @description A single document's relevance score.
+         */
+        RerankResult: {
+            /**
+             * Index
+             * @description Zero-based index into the original documents list
+             */
+            index: number;
+            /**
+             * Relevance Score
+             * @description Relevance score, higher is more relevant
+             */
+            relevance_score: number;
+        };
+        /**
+         * RerankUsage
+         * @description What a rerank request was metered at, and what it cost.
+         *
+         *     ``cost_usd`` and ``pricing_source`` follow a completion's inline usage: both
+         *     are set when the request was priced and both are null otherwise.
+         */
+        RerankUsage: {
+            /**
+             * Cost Usd
+             * @description What the request cost, as a six-decimal USD string; null when it was not priced
+             */
+            cost_usd?: string | null;
+            /**
+             * Pricing Source
+             * @description Which rate priced the request: organization, deployment or defaults; null when not priced
+             */
+            pricing_source?: string | null;
+            /**
+             * Search Units
+             * @description Search units the request was metered at: the count the provider reported, rounded up, or one for a model priced per request whose provider reported none
+             */
+            search_units?: number | null;
+            /**
+             * Total Tokens
+             * @description Tokens the provider reported, when it reports any
+             */
+            total_tokens?: number | null;
         };
         /** ResendVerificationRequest */
         ResendVerificationRequest: {
@@ -22931,7 +23018,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RerankResponse"];
                 };
             };
             /** @description Validation Error */

@@ -14739,6 +14739,41 @@
         "title": "RequirementGroup",
         "type": "object"
       },
+      "RerankMeta": {
+        "description": "Provider-specific billing metadata (optional, preserved as-is).",
+        "properties": {
+          "billed_units": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billed Units"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          }
+        },
+        "title": "RerankMeta",
+        "type": "object"
+      },
       "RerankRequest": {
         "description": "Rerank request.",
         "properties": {
@@ -14806,6 +14841,139 @@
           "documents"
         ],
         "title": "RerankRequest",
+        "type": "object"
+      },
+      "RerankResponse": {
+        "description": "The provider's rerank results, with the gateway's metered usage.",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider-assigned response ID",
+            "title": "Id"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RerankMeta"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model that served the request: the provider-reported one when available, else the requested model",
+            "title": "Model"
+          },
+          "results": {
+            "description": "Results sorted by relevance_score descending",
+            "items": {
+              "$ref": "#/components/schemas/RerankResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/RerankUsage"
+          }
+        },
+        "required": [
+          "results",
+          "usage"
+        ],
+        "title": "RerankResponse",
+        "type": "object"
+      },
+      "RerankResult": {
+        "description": "A single document's relevance score.",
+        "properties": {
+          "index": {
+            "description": "Zero-based index into the original documents list",
+            "title": "Index",
+            "type": "integer"
+          },
+          "relevance_score": {
+            "description": "Relevance score, higher is more relevant",
+            "title": "Relevance Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "relevance_score"
+        ],
+        "title": "RerankResult",
+        "type": "object"
+      },
+      "RerankUsage": {
+        "description": "What a rerank request was metered at, and what it cost.\n\n``cost_usd`` and ``pricing_source`` follow a completion's inline usage: both\nare set when the request was priced and both are null otherwise.",
+        "properties": {
+          "cost_usd": {
+            "anyOf": [
+              {
+                "pattern": "^-?\\d+\\.\\d{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the request cost, as a six-decimal USD string; null when it was not priced",
+            "title": "Cost Usd"
+          },
+          "pricing_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which rate priced the request: organization, deployment or defaults; null when not priced",
+            "title": "Pricing Source"
+          },
+          "search_units": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Search units the request was metered at: the count the provider reported, rounded up, or one for a model priced per request whose provider reported none",
+            "title": "Search Units"
+          },
+          "total_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tokens the provider reported, when it reports any",
+            "title": "Total Tokens"
+          }
+        },
+        "title": "RerankUsage",
         "type": "object"
       },
       "ResendVerificationRequest": {
@@ -35301,7 +35469,7 @@
     },
     "/api/v1/rerank": {
       "post": {
-        "description": "Rerank documents by relevance to a query.\n\nBilling: a model priced per request (``unit: requests``) is charged per\nsearch unit the provider reports, or for one unit when it reports none. A\nmodel priced per token is charged on the input tokens the provider reports.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
+        "description": "Rerank documents by relevance to a query.\n\nBilling: a model priced per request (``unit: requests``) is charged per\nsearch unit the provider reports, or for one unit when it reports none. A\nmodel priced per token is charged on the input tokens the provider reports.\n\n``usage`` carries what the gateway metered: the provider's tokens, the\nsearch units, and, when the request was priced, ``cost_usd`` and\n``pricing_source`` as a completion's usage does. ``meta`` is the provider's\nown billing report, unchanged.\n\nAuthentication modes:\n- Master key + user field: Use specified user (must exist)\n- API key + user field: Use specified user (must exist)\n- API key without user field: Use the shared \"default\" user",
         "operationId": "rerank-create_rerank",
         "requestBody": {
           "content": {
@@ -35317,7 +35485,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResponse"
+                }
               }
             },
             "description": "Successful Response"
