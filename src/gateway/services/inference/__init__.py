@@ -23,7 +23,7 @@ from gateway.services.inference._idempotency import (
     UnknownCaller,
 )
 from gateway.services.inference._lease import keep_claim_alive
-from gateway.services.inference._passthrough_responses import inline_cost, rerank_response
+from gateway.services.inference._passthrough_responses import PassthroughResponseService
 from gateway.services.inference._responses_bridge import (
     REASONING_ITEM_ID_PREFIX,
     aresponses_via_chat_completions,
@@ -45,6 +45,7 @@ __all__ = [
     "IdempotentRequest",
     "InvalidKey",
     "KeyReused",
+    "PassthroughResponseService",
     "Replay",
     "StillInFlight",
     "UnknownDecisionProviderError",
@@ -53,10 +54,8 @@ __all__ = [
     "call_responses",
     "close_decision_client",
     "decision_body",
-    "inline_cost",
     "keep_claim_alive",
     "reported_charge",
-    "rerank_response",
     "request_decision",
     "resolve_decision_provider",
     "run_idempotency_sweeper",

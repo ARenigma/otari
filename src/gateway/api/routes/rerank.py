@@ -9,14 +9,20 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.api.deps import get_config, get_db, get_log_writer, verify_api_key_or_master_key
+from gateway.api.deps import (
+    get_config,
+    get_db,
+    get_log_writer,
+    get_passthrough_response_service,
+    verify_api_key_or_master_key,
+)
 from gateway.api.routes._passthrough import BillingMeters, run_passthrough
 from gateway.core.config import GatewayConfig
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
 from gateway.schemas.inference import RerankResponse
 from gateway.services.budgets import rerank_estimate
-from gateway.services.inference import rerank_response
+from gateway.services.inference import PassthroughResponseService
 from gateway.services.log_writer import LogWriter
 from gateway.services.pricing_service import billed_search_units, rerank_cost, rerank_meters
 from gateway.services.provider_kwargs import ResolvedProvider
@@ -47,6 +53,7 @@ async def create_rerank(
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
     log_writer: Annotated[LogWriter, Depends(get_log_writer)],
+    responses: Annotated[PassthroughResponseService, Depends(get_passthrough_response_service)],
 ) -> RerankResponse:
     """Rerank documents by relevance to a query.
 
@@ -114,7 +121,7 @@ async def create_rerank(
         compute_cost=compute_cost,
         compute_meters=compute_meters,
     )
-    return rerank_response(outcome.result, pricing=outcome.pricing, cost=outcome.cost)
+    return responses.rerank(outcome.result, pricing=outcome.pricing, cost=outcome.cost)
 
 
 def _total_tokens(result: ProviderRerankResponse) -> int | None:
