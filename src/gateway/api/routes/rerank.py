@@ -13,13 +13,12 @@ from gateway.api.deps import get_config, get_db, get_log_writer, verify_api_key_
 from gateway.api.routes._passthrough import BillingMeters, run_passthrough
 from gateway.api.routes._pipeline import standalone_settlement
 from gateway.core.config import GatewayConfig
-from gateway.core.metered_pricing import priced_per_request
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
 from gateway.schemas.inference import RerankResponse, RerankUsage
 from gateway.services.budgets import rerank_estimate
 from gateway.services.log_writer import LogWriter
-from gateway.services.pricing_service import billed_search_units, rerank_cost, rerank_meters
+from gateway.services.pricing_service import billed_search_units, metered_search_units, rerank_cost, rerank_meters
 from gateway.services.provider_kwargs import ResolvedProvider
 
 router = APIRouter(tags=["rerank"])
@@ -116,12 +115,10 @@ async def create_rerank(
         compute_meters=compute_meters,
     )
     result = outcome.result
-    billed_units = result.meta.billed_units if result.meta else None
-    reported_units = billed_units is not None and billed_units.get("search_units") is not None
     settlement = standalone_settlement(outcome.logged)
     usage = RerankUsage(
         total_tokens=_total_tokens(result),
-        search_units=_search_units(result) if reported_units or priced_per_request(outcome.pricing) else None,
+        search_units=metered_search_units(outcome.pricing, result.meta.billed_units if result.meta else None),
         cost_usd=settlement.cost_usd if settlement is not None else None,
         pricing_source=settlement.pricing_source if settlement is not None else None,
     )

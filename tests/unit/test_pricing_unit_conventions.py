@@ -18,6 +18,7 @@ from gateway.services.pricing_service import (
     billed_search_units,
     flat_request_cost,
     input_token_cost,
+    metered_search_units,
     per_image_cost,
     per_request_meters,
     rerank_cost,
@@ -179,3 +180,15 @@ def test_billed_search_units_round_up_and_floor_at_one() -> None:
     assert billed_search_units({"search_units": 0}) == 1
     assert billed_search_units({}) == 1
     assert billed_search_units(None) == 1
+
+
+def test_metered_search_units_report_a_count_only_where_one_applies() -> None:
+    # A reported count is metered whatever the rate, rounded up as it is billed.
+    assert metered_search_units(_per_token_pricing(), {"search_units": 1.2}) == 2
+    assert metered_search_units(None, {"search_units": 1.0}) == 1
+    # A per-request rate bills one unit when the provider reported none.
+    assert metered_search_units(_per_request_pricing(), None) == 1
+    assert metered_search_units(_per_request_pricing(), {"tokens": 5}) == 1
+    # A token rate or no rate, with no reported count, metered no search units.
+    assert metered_search_units(_per_token_pricing(), {"tokens": 5}) is None
+    assert metered_search_units(None, None) is None

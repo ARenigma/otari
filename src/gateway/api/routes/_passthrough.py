@@ -341,18 +341,8 @@ async def run_passthrough(
                 )
             raise
 
-    async def _lookup_pricing(target: ResolvedProvider) -> tuple[ModelPricing | None, PriceSource | None]:
-        """The rate for ``target`` and which rung of the price list supplied it."""
-        found = await resolve_model_pricing(
-            db,
-            target.instance,
-            target.model,
-            use_defaults=pricing_use_defaults,
-            organization_id=organization_id,
-        )
-        return (found.pricing, found.source) if found is not None else (None, None)
-
     pricing: ModelPricing | None = None
+    # Which rung of the price list supplied ``pricing``, recorded with the cost it prices.
     pricing_source: PriceSource | None = None
     if reserve_before_resolve:
         # Nothing is resolved yet, so a rejection here records the requested
@@ -379,7 +369,13 @@ async def run_passthrough(
             # Unlike the branch below, the reservation is already held here, so a
             # failed lookup must refund before propagating or the estimate leaks.
             try:
-                pricing, pricing_source = await _lookup_pricing(resolved)
+                found_pricing = await resolve_model_pricing(
+                    db,
+                    resolved.instance,
+                    resolved.model,
+                    use_defaults=pricing_use_defaults,
+                    organization_id=organization_id,
+                )
             except Exception:
                 # The realistic failure is a DB error, which leaves the session
                 # needing a rollback: without one the refund's own UPDATE raises
@@ -389,6 +385,8 @@ async def run_passthrough(
                 await db.rollback()
                 await refund_reservation(db, reservation)
                 raise
+            if found_pricing is not None:
+                pricing, pricing_source = found_pricing.pricing, found_pricing.source
     else:
         try:
             resolved = resolve_provider_selector(config, model, user_id, workspace_id=workspace_id)
@@ -402,7 +400,15 @@ async def run_passthrough(
             )
             _raise_for_unresolvable_model(model, exc)
         if lookup_pricing:
-            pricing, pricing_source = await _lookup_pricing(resolved)
+            found_pricing = await resolve_model_pricing(
+                db,
+                resolved.instance,
+                resolved.model,
+                use_defaults=pricing_use_defaults,
+                organization_id=organization_id,
+            )
+            if found_pricing is not None:
+                pricing, pricing_source = found_pricing.pricing, found_pricing.source
         # Reserve first so user/blocked/budget rejections (404/403) precede the
         # missing-pricing rejection (402); refund if we then reject for no pricing.
         reservation = await _reserve(

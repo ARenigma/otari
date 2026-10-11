@@ -910,6 +910,20 @@ def billed_search_units(billed_units: Mapping[str, float] | None) -> int:
     return ceil(reported)
 
 
+def metered_search_units(pricing: ModelPricing | None, billed_units: Mapping[str, float] | None) -> int | None:
+    """The search units a rerank request reports as metered, or ``None`` when none apply.
+
+    A provider that reported a count is metered at it, rounded up as
+    :func:`billed_search_units` bills it, and so is a model priced per request,
+    which bills one unit when nothing was reported. A token-priced request whose
+    provider reported no count was not metered in search units at all.
+    """
+    reported = billed_units is not None and billed_units.get("search_units") is not None
+    if reported or priced_per_request(pricing):
+        return billed_search_units(billed_units)
+    return None
+
+
 def rerank_cost(pricing: ModelPricing | None, *, search_units: int, total_tokens: int | None) -> Decimal | None:
     """USD a rerank request costs, or ``None`` when nothing it reported is priced.
 
