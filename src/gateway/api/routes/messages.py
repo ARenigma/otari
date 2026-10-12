@@ -65,8 +65,7 @@ from gateway.api.routes._platform import (
     ResolvedAttempt,
     SettledCost,
     _resolve_platform_credentials,
-    upstream_exception_chain,
-    upstream_exception_shape,
+    with_retry_hint,
 )
 from gateway.api.routes._request_tags import (
     ANTHROPIC_USER_KEY,
@@ -86,6 +85,10 @@ from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import MAX_MCP_SERVER_IDS, McpServerConfig
 from gateway.services.code_execution import ContainerLease, check_container_on_credential
 from gateway.services.files import StagedFile
+from gateway.services.inference import (
+    upstream_exception_chain,
+    upstream_exception_shape,
+)
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import ToolBackend
 from gateway.services.mcp_loop_messages import (
@@ -611,9 +614,14 @@ class _MessagesAdapter:
                 error_type,
                 mapping.detail,
                 mapping.status_code,
-                provider_error_headers(exc, mapping.status_code),
+                with_retry_hint(exc, mapping.status_code, provider_error_headers(exc, mapping.status_code)),
             )
-        return _anthropic_error(_ERR_API, _PROVIDER_ERROR, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return _anthropic_error(
+            _ERR_API,
+            _PROVIDER_ERROR,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            with_retry_hint(exc, status.HTTP_500_INTERNAL_SERVER_ERROR, None),
+        )
 
     def stream_error_payload(self, exc: BaseException) -> str:
         if isinstance(exc, IncompleteStreamError):

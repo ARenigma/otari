@@ -35,6 +35,15 @@ from gateway.services.inference._responses_bridge import (
 from gateway.services.inference._responses_input import strip_gateway_minted_items
 from gateway.services.inference._stream_cost import is_chat_stream_cost_carrier
 from gateway.services.inference._sweeper import run_idempotency_sweeper
+from gateway.services.inference._upstream_errors import (
+    UpstreamErrorKind,
+    is_provider_billing_error,
+    is_retry_futile,
+    upstream_error_message,
+    upstream_exception_chain,
+    upstream_exception_shape,
+    upstream_retry_after,
+)
 
 __all__ = [
     "REASONING_ITEM_ID_PREFIX",
@@ -66,4 +75,11 @@ __all__ = [
     "serves_responses",
     "strip_gateway_minted_items",
     "uses_chat_completions_bridge",
+    "UpstreamErrorKind",
+    "is_provider_billing_error",
+    "is_retry_futile",
+    "upstream_error_message",
+    "upstream_exception_chain",
+    "upstream_exception_shape",
+    "upstream_retry_after",
 ]
