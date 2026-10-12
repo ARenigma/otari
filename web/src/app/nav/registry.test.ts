@@ -73,6 +73,7 @@ describe("nav registry", () => {
       "Playground",
       "Overview",
       "Activity",
+      "Sessions",
       "Usage",
       "Models",
       "Routing",
@@ -292,9 +293,9 @@ describe("nav registry", () => {
     expect(overview?.capability).toBeUndefined()
   })
 
-  it("names the usage surface on both observability pages", () => {
+  it("names the surface each observability page reads", () => {
     // Activity and Usage are two views over /v1/usage, so they gate together on
-    // the surface rather than each on a name of its own.
+    // the surface rather than each on a name of its own; Sessions reads traces.
     const observability = NAV_SECTIONS.find(
       (section) => section.id === "observe",
     )
@@ -302,6 +303,7 @@ describe("nav registry", () => {
     // there is nothing ungated left in here to skip past.
     expect(observability?.items.map((item) => item.surface)).toEqual([
       "usage",
+      "traces",
       "usage",
     ])
   })
