@@ -64,6 +64,6 @@ __all__ = [
     "run_idempotency_sweeper",
     "serves_responses",
     "strip_gateway_minted_items",
-    "with_cohere_tool_call_content",
     "uses_chat_completions_bridge",
+    "with_cohere_tool_call_content",
 ]
