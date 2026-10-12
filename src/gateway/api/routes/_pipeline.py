@@ -258,7 +258,7 @@ from gateway.services.provider_kwargs import (
     resolve_provider_selector,
     with_failover_retries,
 )
-from gateway.services.providers import owned_endpoint_http_client
+from gateway.services.providers import owned_endpoint_http_client, unpriced_model_refusal
 from gateway.services.routing import (
     BudgetState,
     CompiledPlan,
@@ -2120,6 +2120,7 @@ async def resolve_request_context(
     master_key_user_required_detail: str,
     user_forbidden_detail: str,
     code_execution_policies: CodeExecutionPolicyPort,
+    model_provider: ModelProviderPort,
     estimate_cache_write_ttl: Literal["5m", "1h"] | None = None,
     session_principal: SessionPrincipal | None = None,
     routing_signal: Callable[[], RoutingSignal] | None = None,
@@ -2540,7 +2541,9 @@ async def resolve_request_context(
         # cost=null when unpriced.
         if not budget_exempt and pricing_required_but_missing(gate_pricing, require_pricing=config.require_pricing):
             await refund_reservation(db, reservation)
-            no_pricing_detail = no_pricing_error_detail(model)
+            refusal = await unpriced_model_refusal(
+                model, resolved_provider, plan=plan, hosted=model_provider, organization_id=organization_id
+            )
             # Record the rejection after the refund, so an operator who flipped
             # require_pricing on can see that live traffic is being dropped.
             await log_gateway_rejection(
@@ -2551,17 +2554,19 @@ async def resolve_request_context(
                 model=gate_model,
                 provider=gate_instance,
                 endpoint=adapter.endpoint,
-                detail=no_pricing_detail,
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=refusal.detail,
+                status_code=refusal.status_code,
                 started_at=started_at,
                 request_id=request_id,
                 tags=tags,
             )
             raise adapter.error(
-                402,
-                no_pricing_detail,
-                ErrorKind.INVALID_REQUEST,
-                headers=error_headers(PRICING_REQUIRED),
+                refusal.status_code,
+                refusal.detail,
+                ErrorKind.INVALID_REQUEST
+                if refusal.code == PRICING_REQUIRED
+                else error_kind_for_status(refusal.status_code),
+                headers=error_headers(refusal.code),
             )
 
         # Resolve uploaded attachments only once the request is authorized
