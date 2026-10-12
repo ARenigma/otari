@@ -139,18 +139,36 @@ def _option_enums(kind: ToolKind, provider: str) -> dict[str, list[str] | None] 
     return {spec.name: spec.enum for spec in any_search.AnySearch.get_provider_metadata(provider).options}
 
 
+def shared_parameters(kind: ToolKind) -> tuple[str, ...]:
+    """The parameters every provider of the tool takes beside its native options, as its library lists them."""
+    return any_search.SHARED_PARAMETERS if kind == "search" else any_fetch.SHARED_PARAMETERS
+
+
+def _shared_parameter_problems(kind: ToolKind, options: Mapping[str, Any]) -> dict[str, str]:
+    if kind == "search":
+        return any_search.shared_parameter_problems(options)
+    return any_fetch.shared_parameter_problems(options)
+
+
 def option_problems(kind: ToolKind, provider: str, options: Mapping[str, Any]) -> dict[str, str]:
     """Each option the provider's schema does not know or refuses the value of, with why.
 
     Only names and the schema's fixed lists of values are checked, not types:
     a schema's type says what a provider usually takes, and some take more (an
-    Exa ``contents`` is an object, or ``false`` for none).
+    Exa ``contents`` is an object, or ``false`` for none). A shared parameter's
+    value is checked as its library checks it.
     """
     enums = _option_enums(kind, provider)
     if enums is None:
         return {}
+    shared = shared_parameters(kind)
+    refused_shared = _shared_parameter_problems(kind, options)
     problems: dict[str, str] = {}
     for key, value in options.items():
+        if key in shared:
+            if key in refused_shared:
+                problems[key] = f"option '{key}' has a value the provider refuses"
+            continue
         if key not in enums:
             problems[key] = f"option '{key}' is not one the provider knows"
         elif (allowed := enums[key]) is not None and value not in allowed:
