@@ -1683,8 +1683,11 @@ export interface paths {
          * @description List all available models.
          *
          *     Returns models auto-discovered from configured providers, enriched with
-         *     pricing data from the model_pricing table when available. Models that only
-         *     exist in the pricing table are also included for backward compatibility.
+         *     pricing data from the model_pricing table when available, and with each
+         *     model's token limits: the context window from models.dev, or from
+         *     genai-prices where models.dev has none, and the output limit from models.dev
+         *     alone. A limit neither knows is null. Models that only exist in the pricing
+         *     table are also included for backward compatibility.
          */
         get: operations["models-list_models"];
         put?: never;
@@ -10325,6 +10328,8 @@ export interface components {
             deployment_managed: boolean;
             /** Id */
             id: string;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
             /**
              * Object
              * @default model
