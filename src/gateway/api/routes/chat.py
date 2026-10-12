@@ -64,6 +64,7 @@ from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.provider_fields import surface_provider_fields
 from gateway.services.files import FileService, StagedFile
+from gateway.services.inference import with_cohere_tool_call_content
 from gateway.services.log_writer import LogWriter
 from gateway.services.mcp_loop import (
     MAX_TOOL_ITERATIONS_CAP,
@@ -266,10 +267,10 @@ class _ChatAdapter:
         return chunk.usage is not None and not chunk.choices
 
     async def call_provider(self, kwargs: dict[str, Any]) -> ChatCompletion:
-        return await acompletion(**kwargs)  # type: ignore[return-value]
+        return await acompletion(**with_cohere_tool_call_content(kwargs))  # type: ignore[return-value]
 
     async def open_provider_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[ChatCompletionChunk]:
-        return await acompletion(**kwargs)  # type: ignore[return-value]
+        return await acompletion(**with_cohere_tool_call_content(kwargs))  # type: ignore[return-value]
 
     def prepare_stream_kwargs(
         self,

@@ -36,6 +36,7 @@ from gateway.services._tool_loop import (
     run_tool_loop_stream,
     tool_failure_detail,
 )
+from gateway.services.inference import with_cohere_tool_call_content
 from gateway.services.providers import acompletion
 from gateway.services.tools import MAX_TOOL_ITERATIONS_CAP, MAX_USES_EXCEEDED_ERROR, ToolUseBudget, is_capped_call
 
@@ -313,7 +314,7 @@ class _ChatToolLoopStrategy:
     # ---- non-streaming hooks ----
 
     async def call(self, kwargs: dict[str, Any]) -> ChatCompletion:
-        completion: ChatCompletion = await acompletion(**kwargs)  # type: ignore[assignment]
+        completion: ChatCompletion = await acompletion(**with_cohere_tool_call_content(kwargs))  # type: ignore[assignment]
         return completion
 
     def new_usage_accumulator(self) -> dict[str, int]:
@@ -387,7 +388,7 @@ class _ChatToolLoopStrategy:
     # ---- streaming hooks ----
 
     async def open_stream(self, kwargs: dict[str, Any]) -> AsyncIterator[ChatCompletionChunk]:
-        stream: AsyncIterator[ChatCompletionChunk] = await acompletion(**kwargs)  # type: ignore[assignment]
+        stream: AsyncIterator[ChatCompletionChunk] = await acompletion(**with_cohere_tool_call_content(kwargs))  # type: ignore[assignment]
         return stream
 
     def new_stream_state(self) -> _ChatStreamState:

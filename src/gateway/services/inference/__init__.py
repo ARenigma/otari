@@ -1,5 +1,6 @@
 """The inference domain: idempotent completion requests, structured decisions and dialect bridges."""
 
+from gateway.services.inference._cohere_tool_call_content import with_cohere_tool_call_content
 from gateway.services.inference._decisions import (
     DecisionProvider,
     DecisionProviderError,
@@ -63,5 +64,6 @@ __all__ = [
     "run_idempotency_sweeper",
     "serves_responses",
     "strip_gateway_minted_items",
+    "with_cohere_tool_call_content",
     "uses_chat_completions_bridge",
 ]
