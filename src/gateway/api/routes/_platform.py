@@ -12,7 +12,7 @@ lock-in semantics, and the terminal all-failed status mapping uniformly.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar
 
@@ -46,7 +46,12 @@ from gateway.metrics import REGISTRY, Counter
 from gateway.services.bedrock_gateway_auth import build_bedrock_client_args
 from gateway.services.control_plane import ResolveEndpoint, resolve, transport
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
-from gateway.services.provider_kwargs import missing_credential, no_candidate_configured_detail, split_selector
+from gateway.services.provider_kwargs import (
+    missing_credential,
+    no_candidate_configured_detail,
+    split_selector,
+    upstream_exception_chain,
+)
 from gateway.services.sandbox_backend import SandboxNotReachableError
 from gateway.services.web_retrieval_backend import WebSearchNotReachableError
 
@@ -748,16 +753,6 @@ def _response_metadata_headers(response: object) -> Mapping[str, str] | None:
 def _response_metadata(response: object) -> Mapping[str, object]:
     metadata = response.get("ResponseMetadata") if isinstance(response, Mapping) else None
     return metadata if isinstance(metadata, Mapping) else {}
-
-
-def upstream_exception_chain(exc: BaseException) -> Iterator[BaseException]:
-    """Yield an exception and its ``original_exception`` chain once each."""
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        yield current
-        current = getattr(current, "original_exception", None)
 
 
 def upstream_exception_shape(exc: BaseException) -> tuple[UpstreamErrorKind | None, int | None]:

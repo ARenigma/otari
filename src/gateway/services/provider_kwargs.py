@@ -41,7 +41,7 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -894,15 +894,21 @@ class MissingCredential:
         return f"{detail}, or set {self.env_var}." if self.env_var else f"{detail}."
 
 
-def missing_credential(exc: BaseException) -> MissingCredential | None:
-    """The missing credential behind ``exc``, read through its ``original_exception`` chain."""
+def upstream_exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """Yield an exception and its ``original_exception`` chain once each."""
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
+        yield current
+        current = getattr(current, "original_exception", None)
+
+
+def missing_credential(exc: BaseException) -> MissingCredential | None:
+    """The missing credential behind ``exc``, read through its ``original_exception`` chain."""
+    for current in upstream_exception_chain(exc):
         if isinstance(current, MissingApiKeyError):
             return MissingCredential(provider=current.provider_name or "unknown", env_var=current.env_var_name)
-        current = getattr(current, "original_exception", None)
     return None
 
 

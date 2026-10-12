@@ -65,7 +65,6 @@ from gateway.api.routes._platform import (
     ResolvedAttempt,
     SettledCost,
     _resolve_platform_credentials,
-    upstream_exception_chain,
     upstream_exception_shape,
 )
 from gateway.api.routes._request_tags import (
@@ -95,7 +94,7 @@ from gateway.services.mcp_loop_messages import (
     anthropic_tool_loop,
     anthropic_tool_loop_stream,
 )
-from gateway.services.provider_kwargs import ProviderAccounts, apply_endpoint_defaults
+from gateway.services.provider_kwargs import ProviderAccounts, apply_endpoint_defaults, upstream_exception_chain
 from gateway.services.providers import amessages
 from gateway.services.sandbox_backend import CODE_EXECUTION_TOOL_NAME
 from gateway.services.tool_format import inject_purpose_hints_anthropic, openai_to_anthropic_tools

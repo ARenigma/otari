@@ -9,7 +9,7 @@ and ``ToolUseBudget`` is the per-request cap on one tool's gateway-run calls.
 and ``apply_web_access_policy`` narrows its web access to what its workspace permits.
 ``web_search_max_results_baseline`` is how many search results a request gets when it names none.
 ``search_provider_catalog`` lists the providers a search or fetch tool may name.
-``check_tool_entry``, ``check_tool_write``, ``check_kind_unchanged``, ``check_tool_name_is_free`` and
+``check_tool_entry``, ``check_tool_write``, ``check_new_tool``, ``check_kind_unchanged`` and
 ``default_to_pin`` hold a write through ``/api/v1/search-tools`` to the instance rules, and
 ``run_connection_test`` tests an instance with one search or fetch.
 """
@@ -60,8 +60,8 @@ from gateway.services.tools._search_tool_connection import (
 from gateway.services.tools._search_tool_writes import (
     DefaultPin,
     check_kind_unchanged,
+    check_new_tool,
     check_tool_entry,
-    check_tool_name_is_free,
     check_tool_write,
     default_to_pin,
 )
@@ -138,9 +138,9 @@ __all__ = [
     "search_provider_catalog",
     "DefaultPin",
     "check_kind_unchanged",
+    "check_new_tool",
     "check_test_input",
     "check_tool_entry",
-    "check_tool_name_is_free",
     "check_tool_write",
     "default_to_pin",
     "instance_to_test",

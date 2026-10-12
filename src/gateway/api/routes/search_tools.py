@@ -90,9 +90,9 @@ from gateway.services.tool_settings_service import (
 )
 from gateway.services.tools import (
     check_kind_unchanged,
+    check_new_tool,
     check_test_input,
     check_tool_entry,
-    check_tool_name_is_free,
     check_tool_write,
     default_to_pin,
     instance_to_test,
@@ -145,16 +145,16 @@ async def _commit(db: AsyncSession, *, conflict_detail: str | None = None) -> No
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error") from None
 
 
-async def _apply_write(db: AsyncSession, config: GatewayConfig, name: str) -> None:
+async def _apply_write(db: AsyncSession, config: GatewayConfig, change: str) -> None:
     """Make a committed search-tool change take effect on this worker.
 
     The write is already committed, so a refresh failure is logged, not surfaced
-    as a 500; other workers converge within the TTL.
+    as a 500; other workers converge within the TTL. ``change`` names it in that log line.
     """
     try:
         await refresh_search_tool_cache(db, config)
     except DATABASE_ERRORS:
-        logger.warning("Search tool overlay refresh failed after writing '%s'; converges within TTL", name)
+        logger.warning("Search tool overlay refresh failed after %s; converges within TTL", change)
 
 
 @catalog_router.get("/providers")
@@ -249,10 +249,7 @@ async def reencrypt_stored_search_tool_keys(
     except DATABASE_ERRORS:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error") from None
-    try:
-        await refresh_search_tool_cache(db, config)
-    except DATABASE_ERRORS:
-        logger.warning("Search tool overlay refresh failed after re-encrypting keys; converges within TTL")
+    await _apply_write(db, config, "re-encrypting keys")
     return ReencryptSearchToolsResponse(reencrypted=reencrypted, unreadable=unreadable, skipped=skipped)
 
 
@@ -282,16 +279,7 @@ async def create_search_tool(
         await db.rollback()
         logger.exception("Failed to reload stored tools before creating '%s'", name)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error") from None
-    check_tool_write(
-        config,
-        name,
-        entry,
-        kind=kind,
-        sets_name=True,
-        sets_options=request.options is not None,
-        sets_fetch_tool=True,
-    )
-    check_tool_name_is_free(config, name, kind)
+    check_new_tool(config, name, entry, kind=kind)
     conflict = f"A stored {kind} tool '{name}' already exists; use PATCH to update it."
     if await get_search_tool(db, name) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict)
@@ -331,7 +319,7 @@ async def create_search_tool(
             kind,
             name,
         )
-    await _apply_write(db, config, name)
+    await _apply_write(db, config, f"writing '{name}'")
     await db.refresh(row)
     return CreatedSearchToolSchema(
         **row.to_public_dict(),
@@ -425,7 +413,7 @@ async def update_search_tool(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
     await _commit(db)
-    await _apply_write(db, config, name)
+    await _apply_write(db, config, f"writing '{name}'")
     await db.refresh(row)
     from_config = config_file_tools(config, kind)
     return StoredSearchToolSchema.from_model(row, shadows_config=name in from_config)
@@ -448,7 +436,7 @@ async def delete_stored_search_tool(
             detail = f"{BUILTIN_FETCH}, the built-in fetcher, always exists and cannot be deleted."
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
     await _commit(db)
-    await _apply_write(db, config, name)
+    await _apply_write(db, config, f"writing '{name}'")
 
 
 # The in-flight registry's name for a connection test, named or not.

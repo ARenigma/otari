@@ -96,6 +96,20 @@ def check_tool_write(
         )
 
 
+def check_new_tool(config: GatewayConfig, name: str, entry: Mapping[str, Any], *, kind: ToolKind) -> None:
+    """Hold a create, or the test of an unsaved instance, to the write rules against the instances loaded."""
+    check_tool_write(
+        config,
+        name,
+        entry,
+        kind=kind,
+        sets_name=True,
+        sets_options=entry.get("options") is not None,
+        sets_fetch_tool=True,
+    )
+    check_tool_name_is_free(config, name, kind)
+
+
 def check_kind_unchanged(name: str, kind: ToolKind, requested: ToolKind | None) -> None:
     """Refuse an update that changes an instance's kind, so it never moves between the search and fetch maps."""
     if requested is not None and requested != kind:

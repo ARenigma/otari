@@ -97,7 +97,6 @@ from gateway.api.routes._platform import (
     record_abandoned_attempt,
     run_platform_attempts,
     upstream_error_message,
-    upstream_exception_chain,
     upstream_exception_shape,
     upstream_retry_after,
     with_attempt_id,
@@ -250,6 +249,7 @@ from gateway.services.provider_kwargs import (
     missing_credential,
     provider_key,
     resolve_provider_selector,
+    upstream_exception_chain,
     with_failover_retries,
 )
 from gateway.services.providers import owned_endpoint_http_client

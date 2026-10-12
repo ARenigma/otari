@@ -36,7 +36,7 @@ from gateway.services.search_backend import (
     resolve_search_tool,
     run_search,
 )
-from gateway.services.tools._search_tool_writes import check_tool_entry, check_tool_name_is_free, check_tool_write
+from gateway.services.tools._search_tool_writes import check_new_tool, check_tool_entry
 
 
 def instance_to_test(config: GatewayConfig, name: str) -> tuple[ToolInstance, Mapping[str, Any]]:
@@ -63,16 +63,7 @@ def unsaved_instance_to_test(
     this worker has loaded.
     """
     check_tool_entry(name, entry, kind=kind, inherited_api_base=config.web_search_url)
-    check_tool_write(
-        config,
-        name,
-        entry,
-        kind=kind,
-        sets_name=True,
-        sets_options=entry.get("options") is not None,
-        sets_fetch_tool=True,
-    )
-    check_tool_name_is_free(config, name, kind)
+    check_new_tool(config, name, entry, kind=kind)
     return instance_from_entry(kind, name, entry)
 
 
