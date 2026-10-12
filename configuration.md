@@ -1,7 +1,7 @@
 # Configuration
 
 Otari reads a YAML file, environment variables, and selected settings stored by
-the management API. Start with [`config.example.yml`](https://github.com/mozilla-ai/otari/blob/v0.20.0/config.example.yml);
+the management API. Start with [`config.example.yml`](https://github.com/mozilla-ai/otari/blob/v0.21.0/config.example.yml);
 the running dashboard's Settings page shows the effective non-secret scalar
 configuration and which values can be changed without a restart.
 
@@ -359,7 +359,12 @@ review and accept newer snapshots.
 
 Default pricing is off because provider catalogs and reseller rates change.
 With `require_pricing: true`, a budgeted request with no effective price is
-rejected instead of bypassing the budget.
+rejected instead of bypassing the budget. The 402 says what to do: with
+`default_pricing` on, a model the bundled list does not price is most often a
+misspelled name, so it points at `GET /api/v1/models` and at adding a price;
+with it off, it offers both adding a price and turning the fallback on. A model
+whose provider has no credential at all is refused as `provider_not_configured`
+instead, since pricing it would not make it servable.
 
 With `require_pricing: false`, such a request is served, its model tokens carry
 no cost, and its response carries no inline `cost_usd`. The usage row records no
@@ -560,7 +565,10 @@ Rules for instances:
   enriches its results; without one, `web_fetch_default_tool` does.
 - A name contains no `/` or `:`, is not `builtin_fetch` or `none` in any case
   (`None` and `BUILTIN_FETCH` are reserved too), and is unique across both maps.
-- `options` are checked against the provider's options.
+- `options` are checked against the provider's options. A search instance may also
+  set `max_results` and `time_range`, and a fetch instance `max_chars`, which every
+  provider of that tool takes. Not in effect yet: they apply once the instances
+  serve requests through the libraries.
 - A `search_tools` entry that breaks the name rules, or whose `options` carry a key
   the provider does not know or a value it refuses, still loads, with a warning
   that names the entry and the problem. Fix it: a later release refuses it, and
@@ -659,11 +667,14 @@ These are a standalone deployment's settings. On otari.ai a managed
 recommender answers behind the same route, so neither applies there.
 `agent_recommender_model` is a `decision_providers` selector, resolved per
 request, so a deployment that never asks need not configure the provider.
-`agent_recommender_candidates` maps each model name, as the asking harness
-spells it, to what it is for; `null` is allowed when the name says enough. At
-least two are required, and at most 255, the limit a choice question has. The
-defaults are Claude Code's `haiku`, `sonnet` and `opus` aliases with
-descriptions along the lines above.
+`agent_recommender_candidates` maps each model name, as Claude Code spells it,
+to what it is for; `null` is allowed when the name says enough. At least two
+are required, and at most 255, the limit a choice question has. The defaults
+are Claude Code's `haiku`, `sonnet` and `opus` aliases with descriptions along
+the lines above. The list is Claude Code's alone: a pi request sends its own
+`candidates` in the same shape, as Otari model ids (`<provider>:<model>`),
+because [pi-otari](https://github.com/mozilla-ai/pi-otari) decides them on the
+laptop.
 
 ## Mail
 
@@ -817,7 +828,7 @@ contribute capability-gated routers. Most deployments should leave it unset.
 
 This is executable code, not a feature flag. Install the module in the gateway
 environment, pin it to a compatible Otari release, and authenticate every
-contributed route. See [Architecture](https://github.com/mozilla-ai/otari/blob/v0.20.0/ARCHITECTURE.md) for the extension
+contributed route. See [Architecture](https://github.com/mozilla-ai/otari/blob/v0.21.0/ARCHITECTURE.md) for the extension
 boundary.
 
 ## Product feedback

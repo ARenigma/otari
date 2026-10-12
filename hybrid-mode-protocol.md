@@ -56,7 +56,7 @@ path); it is never sent to a standalone or third-party search backend.
 
 ## Grants
 
-> **Status.** Specified, not built. Otari sends and reads none of the fields in this section or in the two sections after it. Each capability adopts them when it ships, starting with files ([#1750](https://github.com/mozilla-ai/otari/issues/1750)). The rules behind them are in [ARCHITECTURE.md](https://github.com/mozilla-ai/otari/blob/v0.20.0/ARCHITECTURE.md#how-a-data-plane-reaches-what-it-does-not-own).
+> **Status.** Specified, not built. Otari sends and reads none of the fields in this section or in the two sections after it. Each capability adopts them when it ships, starting with files ([#1750](https://github.com/mozilla-ai/otari/issues/1750)). The rules behind them are in [ARCHITECTURE.md](https://github.com/mozilla-ai/otari/blob/v0.21.0/ARCHITECTURE.md#how-a-data-plane-reaches-what-it-does-not-own).
 
 The control plane never carries customer traffic. For each resource a request needs, it answers with one of three kinds of authority, and the data plane then goes to the resource directly.
 
@@ -145,7 +145,7 @@ Each front door has its own `aud` and its own `authorization_details` type, and 
 
 ## Try-Confirm/Cancel
 
-Where a capability leaves durable state, such as a stored file or a recorded trace, the exchange is Try-Confirm/Cancel (TCC), as [ARCHITECTURE.md](https://github.com/mozilla-ai/otari/blob/v0.20.0/ARCHITECTURE.md#durable-state-try-confirmcancel) describes. Each capability keeps its own endpoints (for files, prepare, finalize and abandon), and there is no generic TCC endpoint. The rules below apply to every one of them.
+Where a capability leaves durable state, such as a stored file or a recorded trace, the exchange is Try-Confirm/Cancel (TCC), as [ARCHITECTURE.md](https://github.com/mozilla-ai/otari/blob/v0.21.0/ARCHITECTURE.md#durable-state-try-confirmcancel) describes. Each capability keeps its own endpoints (for files, prepare, finalize and abandon), and there is no generic TCC endpoint. The rules below apply to every one of them.
 
 ### Idempotency
 
@@ -746,7 +746,7 @@ rather than as an explicit zero-token result.
 
 | API format | Non-streaming placement | Streaming placement |
 |---|---|---|
-| Chat Completions | `usage.cost_usd`, `usage.pricing_source` | Terminal usage chunk: `usage.cost_usd`, `usage.pricing_source` |
+| Chat Completions | `usage.cost_usd`, `usage.pricing_source` | Terminal usage chunk (a usage chunk with no choices, or one that carries `finish_reason`): `usage.cost_usd`, `usage.pricing_source` |
 | Messages | `usage.cost_usd`, `usage.pricing_source` | `message_delta.usage.cost_usd`, `message_delta.usage.pricing_source` |
 | Responses | `usage.cost_usd`, `usage.pricing_source` | `response.completed.response.usage.cost_usd`, `response.completed.response.usage.pricing_source` |
 

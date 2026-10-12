@@ -32,7 +32,7 @@ retryable failure.
 A candidate whose provider has no credential configured counts as one, so the
 policy moves on to the next. When no candidate has a credential, the request is
 refused with `424 provider_not_configured`. A candidate whose provider rejects
-the configured credential (401 or 403) counts as one too; when every candidate
+the configured credential (401, or a 403 that does not reject the request itself) counts as one too; when every candidate
 either lacks a credential or had it rejected, and at least one was rejected, the
 request is refused with `424 provider_credential_rejected`.
 
@@ -239,7 +239,11 @@ talks to its provider directly can still ask Otari which model a new subagent
 should run on, through `POST /api/v1/routing/recommend`. A standalone
 deployment puts one choice question to the decision model it configured and
 recommends the candidate it picks; on otari.ai a managed recommender answers
-instead. Either way the recommendation is billed to the caller, and nothing
+instead. The harness that asks picks the candidates: Claude Code chooses among
+its own `haiku`, `sonnet` and `opus` aliases, and pi, through
+[pi-otari](https://github.com/mozilla-ai/pi-otari), among the Otari model ids
+it sends with the request.
+Either way the recommendation is billed to the caller, and nothing
 else is dispatched. See
 [Use with Claude Code](use-with-claude-code.md#let-otari-choose-a-subagents-model).
 
@@ -318,9 +322,7 @@ request's cost is `usage.cost_usd` in the body, as described in the
 [API reference](api-reference.md#request-id-and-inline-cost). These headers are
 sent by a standalone gateway.
 
-Built-in tool charges settle on the final row. Candidate price and remaining
-budget are checked before each attempt, so a fallback cannot silently bypass
-pricing or spend limits.
+Built-in tool charges settle on the final row. Candidate price and remaining budget, including a budget narrowed to that candidate's provider, are checked before each attempt, so a fallback cannot silently bypass pricing or spend limits. A fallback is skipped when a budget narrowed to its provider has no room, and the next candidate is tried. A budget on every provider that cannot cover a pricier fallback stops the chain instead. What a fallback spends counts against its own provider's budgets.
 
 ## Failure behavior
 
