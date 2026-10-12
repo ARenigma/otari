@@ -97,9 +97,7 @@ def test_streamed_tool_call_turn_without_content_reaches_cohere(cohere_client: T
 
         async def events() -> AsyncIterator[Any]:
             text = SimpleNamespace(text="Sunny in Rome.")
-            yield SimpleNamespace(
-                type="content-delta", delta=SimpleNamespace(message=SimpleNamespace(content=text))
-            )
+            yield SimpleNamespace(type="content-delta", delta=SimpleNamespace(message=SimpleNamespace(content=text)))
             tokens = SimpleNamespace(input_tokens=10, output_tokens=4)
             yield SimpleNamespace(
                 type="message-end",
