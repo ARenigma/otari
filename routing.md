@@ -29,6 +29,12 @@ usage record the models that were attempted.
 
 `select` chooses where a request starts. `on_failure` lists what to try after a
 retryable failure.
+A candidate whose provider has no credential configured counts as one, so the
+policy moves on to the next. When no candidate has a credential, the request is
+refused with `424 provider_not_configured`. A candidate whose provider rejects
+the configured credential (401 or 403) counts as one too; when every candidate
+either lacks a credential or had it rejected, and at least one was rejected, the
+request is refused with `424 provider_credential_rejected`.
 
 ```yaml
 routing:
@@ -54,6 +60,11 @@ conditions are:
 All conditions in one `when` block must match. Numeric comparisons use exactly
 one of `gt`, `gte`, `lt`, or `lte`. A budget condition does not match a
 caller with no finite budget.
+
+In a policy that can fall over, each candidate gets one upstream call unless a
+retry count is configured, so a throttled provider hands over to the next
+candidate at once rather than after its SDK's own retries. See
+[Provider retries](configuration.md#provider-retries).
 
 ## Load balance across providers (weighted routing)
 
@@ -288,15 +299,37 @@ All attempts share a `request_group_id`, which is the request's `Otari-Request-I
 Absorbed rows have no settled model cost and do not increase request or error
 totals; the final row represents the caller-visible request.
 
+Every successful Chat Completions, Messages, and Responses response, routed or
+not, also says how it was served, so a caller's own metrics can see a fallback
+without reading the usage log:
+
+| Header | Value |
+| --- | --- |
+| `Otari-Provider` | The provider instance that served the request, by its configured name (`openai`, `azure-eu`). Never its base URL or credentials. |
+| `Otari-Attempt-Count` | How many candidates the request was sent to, including the one that served. A candidate skipped without being called, such as a model a rate limit had no room on, is not counted. |
+| `Otari-Fallback` | `true` when a candidate other than the plan's first served the request, whether the first failed or was skipped; otherwise `false`. |
+| `Otari-Response-Duration-Ms` | Whole milliseconds from the start of the handler preamble to the provider answering the request, failed candidates included. For a streamed response, to the stream opening or its first chunk, since the headers go out then. |
+
+A request naming a model or an alias reports `1` and `false`. Streaming responses
+carry the same values: failover happens before the stream opens, so the serving
+candidate and the attempt count are already known when the headers are sent. A
+failure later in the stream is reported in the stream and changes neither. The
+request's cost is `usage.cost_usd` in the body, as described in the
+[API reference](api-reference.md#request-id-and-inline-cost). These headers are
+sent by a standalone gateway.
+
 Built-in tool charges settle on the final row. Candidate price and remaining
 budget are checked before each attempt, so a fallback cannot silently bypass
 pricing or spend limits.
 
 ## Failure behavior
 
-Failover occurs only before response bytes reach the client. A streaming failure
-after the stream begins is returned to the client because switching models
-mid-answer would corrupt the response.
+Failover occurs only before response bytes reach the client. A streamed
+candidate that fails before its first chunk falls over like one that fails to
+open, as long as the failure comes within `streaming_first_chunk_hold_ms`
+(15 seconds by default; `0` limits failover to candidates that fail to open). A
+streaming failure after the stream begins is returned to the client because
+switching models mid-answer would corrupt the response.
 
 A tool loop that has already produced assistant state cannot be replayed on
 another provider. Shared service failures, such as an unavailable mandatory

@@ -1,7 +1,7 @@
 # Configuration
 
 Otari reads a YAML file, environment variables, and selected settings stored by
-the management API. Start with [`config.example.yml`](https://github.com/mozilla-ai/otari/blob/v0.19.0/config.example.yml);
+the management API. Start with [`config.example.yml`](https://github.com/mozilla-ai/otari/blob/v0.20.0/config.example.yml);
 the running dashboard's Settings page shows the effective non-secret scalar
 configuration and which values can be changed without a restart.
 
@@ -26,7 +26,12 @@ providers:
 ```
 
 String values support `${ENV_VAR}` interpolation. Keep credentials in the
-environment or a secret store rather than committing them to YAML.
+environment or a secret store rather than committing them to YAML. A
+reference to a variable that is not set fails the load. A variable that is
+set but empty leaves a `providers` entry with no credential, and Otari ignores
+such an entry with a warning that names the variable, so a credential stored
+for the same provider through the dashboard serves its requests instead of
+being shadowed by the empty one.
 
 ## Environment variables
 
@@ -77,13 +82,16 @@ the corresponding startup value after the database is available.
 | `require_pricing` | Reject unpriced, budgeted traffic. Defaults to `true`. |
 | `default_pricing` | Use the bundled genai-prices catalog when no stored price exists. |
 | `pricing_refresh` | What a scheduled genai-prices check does with an update: `manual`, `review`, or `auto`. |
-| `feedback_enabled` | Allow deliberate feedback submissions to the Otari team. Defaults to `false`; startup setting, unavailable in hybrid mode. See [Product feedback](#product-feedback). |
+| `feedback_enabled` | Allow deliberate feedback submissions to the Otari team. Defaults to `true`; startup setting, unavailable in hybrid mode. See [Product feedback](#product-feedback). |
 | `public_catalog` | Serve the model catalog to visitors without a session. Defaults to `false`. |
 | `public_catalog_rate_limit_per_minute` | Anonymous catalog reads per client address per minute. Defaults to 60. |
 | `rate_limit_rpm` | Per-user request limit. Unset disables it. |
 | `rate_limit_store` | Where `rate_limit_rpm` and the `rate_limits` rules are counted: `memory` (the default) or `redis`. See [Rate limits across replicas](#rate-limits-across-replicas). |
 | `rate_limit_redis_url` | The Redis that the `redis` store counts in. |
 | `rate_limits` | Requests per minute, tokens per minute and requests in flight, per deployment, API key, user or model. Also managed from the dashboard. See [Rate limit rules](#rate-limit-rules). |
+| `provider_max_retries` | How many times a provider SDK retries a failed call before Otari sees the failure. Unset keeps each SDK's default. See [Provider retries](#provider-retries). |
+| `streaming_keepalive_interval_ms` | Idle interval after which a streaming response sends a keepalive, so an intermediary with a read timeout does not cut a slow stream. Defaults to 15000; `0` disables keepalives. |
+| `streaming_first_chunk_hold_ms` | How long a standalone gateway holds a streaming response's status line for the provider's first chunk, so a provider failure before any output gets its own HTTP status, and falls over in a routing policy, rather than ending a `200` in an error event. A slower provider still streams. Defaults to 15000; `0` commits the response as soon as the stream opens. See [Error codes](api-reference.md#error-codes). |
 | `idempotency_retention_sec` | How long a completion sent with an `Idempotency-Key` is kept for a retry to replay. Defaults to a day; `0` ignores the header. Needs `OTARI_SECRET_KEY`, which encrypts the stored response. See [Retrying safely](api-reference.md#retrying-safely). |
 | `enable_metrics` | Serve Prometheus metrics at `/metrics`. Needs the `metrics` extra (`pip install gateway[metrics]`), which the Docker image installs; setting this without it refuses to start. |
 | `accept_incoming_trace_context` | Join spans the gateway creates to the caller's trace. Defaults to `false`. See [Trace context propagation](#trace-context-propagation). |
@@ -264,6 +272,43 @@ providers:
 Call it as `home_lab:qwen3-32b`. The optional `models` list supplies discovery
 for backends without a model-listing endpoint. See [Models](models.md).
 
+### Provider retries
+
+Most provider SDKs retry a failed call themselves before Otari sees the failure.
+The OpenAI and Anthropic SDKs, and every OpenAI-compatible provider built on
+them, retry a 429, a 5xx or a dropped connection twice by default and wait out
+the provider's `Retry-After`, so one request to a throttled provider can make
+three upstream calls and take many seconds to fail. Google's SDK (Gemini,
+Vertex AI) does not retry by default. A client that retries on top of that
+multiplies the calls again.
+
+`provider_max_retries` sets the retry count for every provider instance, and an
+instance's own `max_retries` overrides it:
+
+```yaml
+provider_max_retries: 0   # OTARI_PROVIDER_MAX_RETRIES
+
+providers:
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    max_retries: 1
+```
+
+When neither is set, each SDK keeps its own default, except in a routing policy
+that can fall over to another candidate (an `on_failure` chain or a weighted or
+router pool): there every candidate makes one upstream call, so a failure moves
+to the next candidate at once instead of after the SDK's retries. Setting either
+value restores retries inside such a policy too.
+
+The setting reaches the OpenAI-compatible, Anthropic (including Azure and
+Vertex AI), Groq, Cerebras, Together, Gemini and Vertex AI clients. Other
+providers (Bedrock, Mistral, Cohere, Ollama and the rest) keep their SDK's own
+retry behavior, which `client_args` can still configure where the SDK allows
+it. A retry setting in an instance's `client_args` (`max_retries`, or
+`http_options.retry_options` for Google) wins over both values. Neither value
+reaches an [owned provider endpoint](provider-endpoints.md), which keeps its
+SDK's default outside a policy that can fall over.
+
 ### Runtime provider management
 
 Standalone operators can store provider credentials through the Providers page
@@ -319,7 +364,10 @@ rejected instead of bypassing the budget.
 With `require_pricing: false`, such a request is served, its model tokens carry
 no cost, and its response carries no inline `cost_usd`. The usage row records no
 cost unless the request also ran priced gateway tools, whose charges are still
-recorded. The gateway logs a warning for each unpriced model at most once an
+recorded. The same setting governs an organization's own provider keys: a model
+a key offers that nothing prices is switched on and served at no cost, where
+`require_pricing: true` keeps it switched off until it has a rate (see
+[Who is shown which models](models.md#who-is-shown-which-models)). The gateway logs a warning for each unpriced model at most once an
 hour per process, and the dashboard shows operators a banner naming the models
 that served unpriced traffic in the selected workspace in the last 24 hours
 and still have no stored price, linked to those requests in Activity, where
@@ -405,11 +453,29 @@ Use `pricing_tiers` for a rate that applies to an entire request after an input
 token threshold. The OpenAPI pricing schemas and dashboard editor show the
 accepted shape.
 
-### Per-request pricing (audio, moderations, and completion models)
+### Per-request pricing (audio, moderations, rerank, and completion models)
 
 Audio, moderations, and direct search do not use token pricing. They reuse
 `input_price_per_million` as USD per million requests. An unpriced request on
 these endpoints is served at zero cost.
+
+A search tool's rate is keyed `provider:tool` (`exa:exa-search` for a tool named
+`exa-search` backed by `exa`), and its provider needs no entry under
+`providers:`. That rate is what a search reserves against the caller's budget
+before it runs; without one no dollars are held, though the search still holds
+one request against a request-count budget. A successful search settles at the
+provider's reported charge when it reports one, and at the rate otherwise.
+
+Rerank accepts either unit. A rerank model priced `unit: tokens` is charged
+on the input tokens the provider reports. Providers that bill reranking per
+search unit (one query over a batch of documents) report that count and no
+tokens, so give such a model `unit: requests` and it is charged the reported
+units at `input_price_per_million / 1,000,000` each, or one unit when the
+provider reports none. The budget reservation holds one unit and settles at
+the reported count. The default-pricing dataset carries no rerank rates, so a
+rerank model needs its own pricing row, for example `cohere:rerank-v3.5` at
+`input_price_per_million: 2000` (USD 2 per 1,000 searches) with
+`unit: requests`.
 
 A model served over chat completions, the Responses API, or Messages can be
 priced the same way, for an upstream that bills per call and reports little or
@@ -448,9 +514,11 @@ token price to a request-priced or image-priced endpoint.
 
 `search_tools` names the deployment's search instances. Direct `POST /api/v1/search`
 calls use them by name, and the in-loop `otari_web_search` tool uses the default
-one (below). The same entries can be managed at runtime from Tools or
-`/api/v1/search-tools`. `fetch_tools` names fetch instances, for the
-`otari_web_fetch` tool and for enriching search results.
+one (below). `fetch_tools` names fetch instances, for the `otari_web_fetch` tool
+and for enriching search results. Both can also be stored at runtime through
+`/api/v1/search-tools`, a fetch instance with `kind: fetch` and listed with
+`?kind=fetch`, and search instances from Tools too. A stored instance wins over
+a configuration file entry of the same name and kind.
 
 ```yaml
 search_tools:
@@ -471,25 +539,46 @@ web_fetch_default_tool: builtin_fetch
 web_search_max_calls: 10
 ```
 
-`GET /api/v1/search-tools/providers` publishes the supported providers and whether
-each requires an `api_key` or `api_base`. Provider options and request filters
-are covered in [Built-in tools](tools.md). A tool carrying an `api_key` must use
-an HTTPS `api_base`; a keyless local SearXNG endpoint may use HTTP.
+`GET /api/v1/search-tools/providers` publishes the supported search providers,
+and with `?kind=fetch` the fetch providers: whether each requires an `api_key` or
+`api_base`, and the native options an instance may set. Any signed-in user or
+API key can read it. Only the deployment's operator also sees which of the
+deployment's instances use each provider, and the `api_base` a `searxng`
+instance inherits from `web_search_url`. Provider options and request filters
+are covered in [Built-in tools](tools.md).
+
+An instance takes its key only from its own `api_key`, such as
+`"${EXA_API_KEY}"` above. Unlike an LLM provider, it never falls back to the
+provider's environment variable, so an entry for a provider that needs a key and
+carries none stops startup. A tool carrying an `api_key` must use an HTTPS
+`api_base`; a keyless local SearXNG endpoint may use HTTP.
 
 Rules for instances:
 
 - `builtin_fetch`, the built-in fetcher, is a fetch instance that always exists and
   cannot be declared. A search instance's `fetch_tool` names the fetch instance that
   enriches its results; without one, `web_fetch_default_tool` does.
-- A name contains no `/` or `:`, is not `builtin_fetch` or `none`, and is unique
-  across both maps.
+- A name contains no `/` or `:`, is not `builtin_fetch` or `none` in any case
+  (`None` and `BUILTIN_FETCH` are reserved too), and is unique across both maps.
 - `options` are checked against the provider's options.
 - A `search_tools` entry that breaks the name rules, or whose `options` carry a key
   the provider does not know or a value it refuses, still loads, with a warning
   that names the entry and the problem. Fix it: a later release refuses it, and
   once the instances serve requests, the options named are left out of every call.
   A `fetch_tools` entry that breaks the name rules, or reuses a configured search
-  instance's name, stops startup.
+  instance's name, stops startup; a stored one is left out, with an error.
+
+Writes through `/api/v1/search-tools` are held to these rules in what they set, so
+rotating the key of an instance stored before the rules still works. When the
+in-loop default is the single search instance, with no default set and no legacy
+settings, adding a second there first sets `web_search_default_tool` to the first,
+so in-loop search does not turn off, and the response says so. That runtime value
+wins over the configuration file until it is cleared.
+
+`POST /api/v1/search-tools/test` runs one search or one fetch on an instance before
+it is saved, and `POST /api/v1/search-tools/{name}/test` on one that exists. Each
+says whether the call worked, the error's tag when it did not, and how many hits or
+characters came back, never the content. `builtin_fetch` has no test yet.
 
 The defaults and the call limit are runtime settings, also set from Tools or
 `/api/v1/tool-settings`. Clearing a runtime value falls back to the configuration
@@ -509,7 +598,7 @@ file or environment, then to the built-in default.
   together. Default 10.
 
 A default that names no instance, set in the file or earlier at runtime, is treated
-as unset, with a warning at startup.
+as unset, with a warning at startup, or from the refresh that first finds it so.
 
 In this release these settings are read and checked, and no request uses them yet.
 They take effect in later releases: `web_fetch_default_tool` when web fetch moves
@@ -728,17 +817,17 @@ contribute capability-gated routers. Most deployments should leave it unset.
 
 This is executable code, not a feature flag. Install the module in the gateway
 environment, pin it to a compatible Otari release, and authenticate every
-contributed route. See [Architecture](https://github.com/mozilla-ai/otari/blob/v0.19.0/ARCHITECTURE.md) for the extension
+contributed route. See [Architecture](https://github.com/mozilla-ai/otari/blob/v0.20.0/ARCHITECTURE.md) for the extension
 boundary.
 
 ## Product feedback
 
-With `feedback_enabled` on, signed-in dashboard users can choose **Feedback**,
-beside Documentation in the top bar (in the account menu on a phone), to send a
-message to the Otari team. The team receives it privately in Slack. Only the
-message is sent: no email, screenshot, page URL, account identifier, deployment
-identifier, or usage history is attached. Opening the form, typing, and
-canceling make no outbound request.
+Signed-in dashboard users can choose **Feedback**, beside Documentation in the
+top bar (in the account menu on a phone), to send a message to the Otari team.
+The team receives it privately in Slack. Only the message is sent: no email,
+screenshot, page URL, account identifier, deployment identifier, or usage
+history is attached. Opening the form, typing, and canceling make no outbound
+request.
 
 The gateway forwards the message to
 `https://api.otari.ai/api/v1/feedback/submissions`. It does not forward the
@@ -747,15 +836,11 @@ see connection metadata, so this is private feedback, not anonymous feedback.
 Keep request-body capture disabled for the feedback endpoint in any additional
 logging or tracing you configure.
 
-Feedback is off by default. To turn it on, set `feedback_enabled: true` in YAML
-or `OTARI_FEEDBACK_ENABLED=true`, then restart. Off, the endpoint is not mounted
-and the Feedback entry is hidden. Standalone and hosted deployments can offer
-it; hybrid gateways never do. This setting is visible in Settings but cannot be
-changed there at runtime.
-
-The otari.ai intake does not deliver to Slack yet, so until it does, every send
-fails with the "didn't reach us" message and the gateway logs the receiver's
-status. That is why feedback is off by default for now.
+Feedback is on by default. To turn it off, set `feedback_enabled: false` in
+YAML or `OTARI_FEEDBACK_ENABLED=false`, then restart. Off, the endpoint is not
+mounted and the Feedback entry is hidden. Standalone and hosted deployments
+offer it; hybrid gateways never do. This setting is visible in Settings but
+cannot be changed there at runtime.
 
 Each signed-in person (and the master key) can send five messages every ten
 minutes; past that the gateway answers `429` with `Retry-After`.

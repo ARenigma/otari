@@ -2,8 +2,8 @@
 
 Otari serves an OpenAPI document at `/api/v1/openapi.json` and interactive API
 docs at `/api/v1/docs` by default. The repository also commits the generated
-[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/v0.19.0/docs/public/openapi.json) and
-[Postman collection](https://github.com/mozilla-ai/otari/blob/v0.19.0/docs/public/otari.postman_collection.json). Those generated
+[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/v0.20.0/docs/public/openapi.json) and
+[Postman collection](https://github.com/mozilla-ai/otari/blob/v0.20.0/docs/public/otari.postman_collection.json). Those generated
 artifacts are the source of truth for paths, parameters, and schemas.
 
 The default server address is `http://localhost:8000`. The API is mounted at
@@ -67,6 +67,18 @@ Standalone mode also serves embeddings, images, audio, files, batches,
 moderations, rerank, search, and decisions. Provider support differs by endpoint, so use
 `GET /api/v1/models` and the OpenAPI document for the deployment you are calling.
 
+### Embedding input type
+
+Some embedding models embed a query differently from a document, so
+`POST /api/v1/embeddings` takes an optional `input_type` beside the OpenAI
+fields and passes it to the provider: Cohere (`search_document`,
+`search_query`, `classification`, `clustering`, `image`) and Voyage (`query`,
+`document`). The provider checks the value, and its own default applies when the
+field is omitted. A
+request that sets `input_type` for any other provider is refused with a `400`
+rather than embedded as if the field were absent. With the OpenAI SDK, send it
+through `extra_body={"input_type": "search_query"}`.
+
 ### Responses on providers without a Responses API
 
 `/api/v1/responses` also serves providers that only implement Chat Completions
@@ -103,11 +115,16 @@ no way to send them back.
 
 Every Chat, Messages, and Responses response carries an `Otari-Request-ID`
 header, streaming or not. In hybrid mode it is the platform's id for the
-request; a standalone gateway mints its own.
+request; a standalone gateway mints its own. A standalone gateway also names the
+provider instance that served the request, whether a fallback did, and how long
+it took, in `Otari-Provider`, `Otari-Attempt-Count`, `Otari-Fallback` and
+`Otari-Response-Duration-Ms`; see
+[What is billed and what the caller sees](routing.md#what-is-billed-and-what-the-caller-sees).
 
 A priced response also carries its cost on the usage object it already returns,
-as `usage.cost_usd` (a six-decimal USD string) and `usage.pricing_source`. On a
-stream the fields ride the terminal usage event: the last usage chunk for Chat
+as `usage.cost_usd` (a six-decimal USD string) and `usage.pricing_source`. The
+standalone [rerank](#rerank) and embeddings endpoints carry the same two fields
+on their `usage`. On a stream the fields ride the terminal usage event: the last usage chunk for Chat
 Completions, `message_delta` for Messages, and `response.completed` for
 Responses. The two fields always appear together, and an unpriced or
 unreported request carries neither.
@@ -222,8 +239,8 @@ Send an `Idempotency-Key` header on a non-streaming Chat, Messages, or Responses
 request to make that retry safe. The value is any unique string of 1 to 255
 printable ASCII characters; a UUID is the usual choice. A retry with the same key
 and the same body then gets the original response, with its original
-`Otari-Request-ID` and `usage.cost_usd`, and an `Otari-Idempotent-Replayed: true`
-header, without calling the provider or billing again. While the original is
+`Otari-Request-ID`, serving headers and `usage.cost_usd`, and an `Otari-Idempotent-Replayed: true`
+header (but no `Otari-Response-Duration-Ms`, which described the original), without calling the provider or billing again. While the original is
 still running, a retry is answered 409 with `Retry-After`, and if the original
 fails the next retry runs in its place.
 
@@ -261,6 +278,34 @@ turned off, or `OTARI_SECRET_KEY` was rotated away. Two more come from failures:
 the gateway stops after the provider answers and before the response is stored,
 or the database stays unreachable for about `idempotency_lease_sec` while the
 original runs, so its claim lapses and a retry takes it over.
+
+## Rerank
+
+`POST /api/v1/rerank` orders a list of documents by relevance to a query. The
+response keeps the provider's own billing report in `meta`, unchanged, and says
+in `usage` what the gateway metered and what it charged:
+
+```json
+{
+  "id": "…",
+  "model": "rerank-v3.5",
+  "results": [{"index": 0, "relevance_score": 0.86}],
+  "meta": {"billed_units": {"search_units": 1.0}, "tokens": null},
+  "usage": {"total_tokens": null, "search_units": 1, "cost_usd": "0.002000", "pricing_source": "deployment"}
+}
+```
+
+- `total_tokens` is the token count the provider reported, or null when it reported none.
+- `search_units` is the number of search units the request was billed for, and
+  appears only when the model is priced per request: the provider's count
+  rounded up, or one when it reported none. A model priced per token is billed
+  on `total_tokens` instead, and its usage has no `search_units`.
+- `cost_usd` and `pricing_source` are the inline cost described under
+  [Request ID and inline cost](#request-id-and-inline-cost), and are absent when
+  the request was not priced.
+
+How a rerank model is priced, per search unit or per input token, is described in
+[Per-request pricing](configuration.md#per-request-pricing-audio-moderations-rerank-and-completion-models).
 
 ## Search
 
@@ -313,8 +358,9 @@ A decision is billed like a completion: the `<provider>:<model>` rate prices the
 reported tokens, the provider's own reported cost is used when no rate is set
 (only OpenRouter reports one), and it is subject to budgets, key allow-lists and
 `require_pricing`. A provider's refusal of the request (400, 422, or llama-server's
-501 for a model that cannot answer it) returns 400, its rate limit returns 429, and
-any other failure returns 502.
+501 for a model that cannot answer it) returns 400, its rate limit returns 429, its
+refusal of the gateway's credential (401 or 403) returns 424 `provider_credential_rejected`,
+and any other failure returns 502.
 
 ## Routing policies
 
@@ -329,6 +375,21 @@ Otari may return a short, sanitized provider diagnostic when the upstream
 provider rejects something the caller can fix, such as a model name or request
 parameter. Credentials, URLs, account identifiers, and reflected payloads are
 removed.
+
+The completion routes and the pass-through routes (embeddings, images, audio,
+moderations, rerank) classify a provider failure the same way. A provider that
+rejects the request (its own 400 or 422) answers 400, and an unknown model 404.
+A model whose provider has no such operation (rerank on a chat model, for
+example) or whose SDK has no parameter for a field the caller sent answers 400,
+naming the operation or the field. An OpenAI-compatible client does not retry a
+400 or a 404. The provider's rate limit answers 429 with
+`Otari-Error-Code: upstream_rate_limited` and the provider's `Retry-After` when
+it sent one, which a client may retry after waiting. A provider that refuses the
+gateway's own credential (its 401 or 403) answers 424 with
+`Otari-Error-Code: provider_credential_rejected`, which a client does not retry
+either. A provider timeout answers 504, and any other provider failure 502.
+When the request named a model alias,
+a provider message that names the alias's target names the alias instead.
 
 Gateway-side failures use fixed public messages. Diagnose them with protected
 logs and safe metadata such as request ID, provider, model, and status. Do not
@@ -351,14 +412,41 @@ reworded.
 | `upstream_rate_limited` | 429 | The provider rate limited the gateway | `Retry-After` when the provider sent one |
 | `invalid_model` | 400 | The model selector names no configured provider | |
 | `model_not_allowed` | 403 | The key may not use the model | |
+| `model_not_serving` | 403 | The organization offers the model on a provider key, with its serving switch off | |
+| `model_not_found` | 404 | A provider key of the organization serves the provider, and none offers the model | |
 | `context_length_exceeded` | 400 | The prompt is too long for the model | |
 | `all_candidates_rejected` | 400 | Every model a routing policy, a catalog ID or the control plane tried rejected the request as invalid | |
 | `pricing_required` | 402 | `require_pricing` is on and the model has no price | |
+| `provider_not_configured` | 424 | The gateway holds no credential for the model's provider, so nothing was sent upstream. Not a 5xx, so a client does not retry it: add the credential in `config.yml`, through the dashboard, or in the environment variable the detail names | |
+| `provider_credential_rejected` | 424 | The provider refused the credential the gateway holds for it (an upstream 401 or 403). It is the gateway's key, not the caller's, so it is never a 401 or 403; and not a 5xx, because no retry makes the key valid. Replace or fix the provider credential. The usage row keeps the provider's own status. A routing policy moves on to its next candidate first, and answers with this code when every candidate either had no credential or had it rejected, and at least one was rejected | |
 | `end_user_budget_not_allowed` | 403 | A service key named an end-user budget that is not on its `end_user_budget_ids` | |
+| `invalid_request` | 422 | The request body or a parameter failed schema validation. `detail` lists the failing fields, each with `loc`, `msg` and `type` | |
+| `provider_error` | 200, in a stream's error event only | The provider failed after the stream started, for a reason no other code names | |
+
+A streamed request whose provider fails before producing any output is answered
+with an ordinary HTTP error, with the same status, `detail` and code the request
+would get unstreamed: a `400` for a parameter the provider does not accept, a
+`502` for a provider outage. Otari holds the response until the provider's first
+chunk to make that possible. A standalone gateway holds it for at most
+`streaming_first_chunk_hold_ms` (15 seconds by default; `0` turns the hold off
+and commits the `200` as soon as the stream opens), and does not hold a stream
+that runs gateway tools (MCP, code execution, web search). A provider slower than
+that to start still streams, and a failure after that point is reported as
+below. A hybrid gateway holds every stream for its first-chunk failover timeout.
 
 A failure after a stream has started arrives as an error event, which carries
 the code as `error.code` on Chat Completions and Responses:
 `{"error": {"message": "...", "type": "server_error", "code": "upstream_rate_limited"}}`.
+The status line has already gone out as `200` by then, so the event is the only
+place the failure is named. It carries the code from the table above when one
+applies (`upstream_rate_limited`, `context_length_exceeded`), otherwise
+`provider_error` when the provider failed the stream, including one it ended
+early. Its message is the `detail` the same failure would carry as an HTTP
+error where that names a cause (a rejected parameter, the provider's own
+explanation of a rejected request, redacted as described above), and a fixed
+`An error occurred during streaming` otherwise. An event with no `code` is a
+failure inside the gateway. Either way, a standalone gateway records the
+request's usage row with status `error`.
 On Messages, a stream the provider ends without `message_stop`, including one
 that sent no events at all, also ends in an `api_error` event rather than
 closing as if it had succeeded, and the request is settled as failed.
