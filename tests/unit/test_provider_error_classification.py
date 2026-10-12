@@ -40,12 +40,14 @@ from gateway.api.routes._pipeline import (
     PROVIDER_BAD_REQUEST_DETAIL,
     PROVIDER_BILLING_DETAIL,
     PROVIDER_CREDENTIALS_DETAIL,
+    PROVIDER_ERROR_DETAIL,
     PROVIDER_MODEL_NOT_FOUND_DETAIL,
     PROVIDER_RATE_LIMITED_DETAIL,
     PROVIDER_TIMEOUT_DETAIL,
     classify_provider_error,
     failure_status_code,
     provider_error_headers,
+    provider_failure_detail,
     refusal_code,
     stream_error_code,
     stream_error_message,
@@ -54,12 +56,14 @@ from gateway.api.routes._platform import (
     SHOULD_RETRY_HEADER,
     _provider_failure_http_exc,
     get_shared_rejection,
+    is_provider_credential_rejection,
     with_retry_hint,
 )
 from gateway.core.error_codes import PROVIDER_CREDENTIAL_REJECTED, PROVIDER_NOT_CONFIGURED
 from gateway.core.provider_params import SENSITIVE_PARAM_FIELDS
 from gateway.services.inference import (
     is_retry_futile,
+    is_upstream_request_fault,
     upstream_retry_after,
 )
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
@@ -75,6 +79,15 @@ _REASONING_TOOLS_MSG = (
     "/v1/chat/completions. To use function tools, use /v1/responses or set "
     "reasoning_effort to 'none'."
 )
+
+
+def _openai_connection_error(cause: Exception) -> openai.APIConnectionError:
+    """The OpenAI SDK's connection error, raised from the httpx error as the SDK does."""
+    request = httpx.Request("POST", "https://internal-proxy.example:8443/v1/chat/completions")
+    try:
+        raise openai.APIConnectionError(request=request) from cause
+    except openai.APIConnectionError as exc:
+        return exc
 
 
 class _StatusError(Exception):
@@ -1013,8 +1026,8 @@ def test_a_stream_error_event_names_a_cause_the_unstreamed_error_would() -> None
     }
 
 
-def test_a_stream_error_event_keeps_the_fixed_message_for_an_unclassified_failure() -> None:
-    assert stream_error_message(_StatusError(503)) is None
+def test_a_stream_error_event_keeps_the_fixed_message_for_a_failure_that_names_no_cause() -> None:
+    assert stream_error_message(_StatusError(503)) == "The provider failed the request with HTTP 503"
     assert stream_error_message(RuntimeError("bug")) is None
     assert stream_error_message(HTTPException(status_code=400, detail="internal")) is None
 
@@ -1033,13 +1046,27 @@ def test_a_stream_ended_by_a_more_specific_refusal_keeps_its_code() -> None:
         _StatusError(503),
         httpx.ConnectError("refused"),
         ProviderError("upstream broke"),
-        IncompleteStreamError(3),
         TypeError("AsyncClientV2.chat_stream() got an unexpected keyword argument 'n'"),
     ],
-    ids=["rejected", "unavailable", "unreachable", "any-llm", "incomplete", "rejected-param"],
+    ids=["rejected", "unavailable", "unreachable", "any-llm", "rejected-param"],
 )
 def test_a_stream_the_provider_failed_is_coded_as_a_provider_error(exc: Exception) -> None:
     assert stream_error_code(exc) == "provider_error"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        IncompleteStreamError(3),
+        httpx.RemoteProtocolError("peer closed connection without sending complete message body"),
+        httpx.ReadError("connection reset"),
+        _openai_connection_error(httpx.RemoteProtocolError("Server disconnected")),
+    ],
+    ids=["no-finish", "chunked-body-cut", "reset", "sdk-wrapped"],
+)
+def test_a_stream_the_provider_ended_early_has_its_own_code_and_message(exc: Exception) -> None:
+    assert stream_error_code(exc) == "provider_stream_interrupted"
+    assert stream_error_message(exc) == "The provider's stream ended before it finished"
 
 
 @pytest.mark.parametrize(
@@ -1447,3 +1474,109 @@ def test_a_credential_rejection_never_echoes_its_body() -> None:
     upstream = _openai_status_error(401, _openai_error("Incorrect API key provided: sk-proj-ABCDEFGHIJKLMNOP"))
 
     assert classify_provider_error(upstream) == (424, PROVIDER_CREDENTIALS_DETAIL)
+
+
+# ---------------------------------------------------------------------------
+# An upstream 403 that refuses the request, not the gateway's key
+# ---------------------------------------------------------------------------
+
+_OPENAI_LOGPROBS_MSG = "You are not allowed to request logprobs from this model"
+
+
+def _anthropic_forbidden() -> anthropic.PermissionDeniedError:
+    body = {"type": "error", "error": {"type": "permission_error", "message": "Your API key does not have permission"}}
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return anthropic.PermissionDeniedError(
+        f"Error code: 403 - {body}", response=httpx.Response(403, request=request, json=body), body=body
+    )
+
+
+@pytest.mark.parametrize("unified", [False, True], ids=["raw", "unified"])
+def test_an_openai_403_invalid_request_is_the_callers_400_with_the_providers_sentence(unified: bool) -> None:
+    upstream = _openai_status_error(403, _openai_error(_OPENAI_LOGPROBS_MSG))
+    exc = convert_exception(upstream, "openai") if unified else upstream
+
+    assert is_upstream_request_fault(exc)
+    assert not is_provider_credential_rejection(exc)
+    assert classify_provider_error(exc) == (400, _OPENAI_LOGPROBS_MSG)
+    assert provider_error_headers(exc, 400) is None
+    assert stream_error_code(exc) != PROVIDER_CREDENTIAL_REJECTED
+    # The row keeps the provider's own status.
+    assert failure_status_code(exc) == 403
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        _openai_status_error(403, _openai_error("Project `proj_abc` does not have access to model `gpt-5`")),
+        _openai_status_error(403, {"message": "Country not supported", "type": "request_forbidden", "code": None}),
+        _anthropic_forbidden(),
+        _StatusError(403),
+    ],
+    ids=["openai-project", "openai-request-forbidden", "anthropic-permission", "no-body"],
+)
+def test_a_403_about_the_key_stays_a_rejected_credential(upstream: Exception) -> None:
+    assert not is_upstream_request_fault(upstream)
+    assert is_provider_credential_rejection(upstream)
+    assert classify_provider_error(upstream) == (424, PROVIDER_CREDENTIALS_DETAIL)
+
+
+def test_a_401_is_a_rejected_credential_whatever_its_body_says() -> None:
+    upstream = _openai_status_error(401, _openai_error("Incorrect API key provided"))
+    assert not is_upstream_request_fault(upstream)
+    assert classify_provider_error(upstream) == (424, PROVIDER_CREDENTIALS_DETAIL)
+
+
+def test_attempts_that_all_hit_a_request_fault_403_share_the_callers_400() -> None:
+    errors = [_openai_status_error(403, _openai_error(_OPENAI_LOGPROBS_MSG)) for _ in range(2)]
+    rejection = get_shared_rejection(errors)
+    assert rejection is not None
+    assert rejection.status_code == 400
+    assert rejection.headers != {"Otari-Error-Code": PROVIDER_CREDENTIAL_REJECTED}
+
+
+# ---------------------------------------------------------------------------
+# provider_failure_detail: what the 502 says happened upstream
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("unified", [False, True], ids=["raw", "unified"])
+@pytest.mark.parametrize(
+    ("upstream", "expected"),
+    [
+        (_StatusError(500), "The provider failed the request with HTTP 500"),
+        (_StatusError(503), "The provider failed the request with HTTP 503"),
+        (
+            _openai_connection_error(httpx.RemoteProtocolError("Server disconnected without sending a response.")),
+            "The provider closed the connection before answering",
+        ),
+        (
+            _openai_connection_error(httpx.ConnectError("[Errno 61] Connection refused")),
+            "The gateway could not connect to the provider",
+        ),
+    ],
+    ids=["500", "503", "closed", "unreachable"],
+)
+def test_a_provider_failure_left_to_the_502_says_what_happened_upstream(
+    upstream: Exception, expected: str, unified: bool
+) -> None:
+    exc = convert_exception(upstream, "openai") if unified else upstream
+
+    assert classify_provider_error(exc) is None
+    detail = provider_failure_detail(exc)
+    assert detail == expected
+    assert _RAW not in detail
+    assert "internal-proxy" not in detail
+
+
+def test_a_failure_inside_the_gateway_keeps_the_fixed_detail() -> None:
+    assert provider_failure_detail(RuntimeError("bug at /srv/otari")) == PROVIDER_ERROR_DETAIL
+    assert provider_failure_detail(RuntimeError("bug"), "fallback") == "fallback"
+
+
+def test_the_502_keeps_its_retry_behavior() -> None:
+    """Only the detail changed: a provider 5xx still carries no x-should-retry, so a client retries it."""
+    answer = _provider_failure_http_exc(_StatusError(500), fallback_detail="LLM provider error")
+    assert answer.status_code == 502
+    assert answer.detail == "The provider failed the request with HTTP 500"
+    assert SHOULD_RETRY_HEADER not in (answer.headers or {})

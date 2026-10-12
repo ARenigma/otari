@@ -119,6 +119,7 @@ from gateway.core.error_codes import (
     PRICING_REQUIRED,
     PROVIDER_CREDENTIAL_REJECTED,
     PROVIDER_ERROR,
+    PROVIDER_STREAM_INTERRUPTED,
     UPSTREAM_RATE_LIMITED,
     error_code_of,
     error_headers,
@@ -210,6 +211,9 @@ from gateway.services.inference import (
     StillInFlight,
     UnknownCaller,
     is_provider_billing_error,
+    is_upstream_connect_failure,
+    is_upstream_request_fault,
+    is_upstream_stream_interrupted,
     upstream_body_messages,
     upstream_error_message,
     upstream_exception_chain,
@@ -384,6 +388,7 @@ API_KEY_NO_USER_DETAIL = "API key has no associated user"
 NO_RESOLVABLE_PROVIDER_DETAIL = "Authorization service returned no resolvable provider"
 PROVIDER_ERROR_DETAIL = "LLM provider error"
 PROVIDER_TIMEOUT_DETAIL = "LLM provider timeout"
+PROVIDER_STREAM_INTERRUPTED_DETAIL = "The provider's stream ended before it finished"
 # Fixed details for the provider failures that are the gateway's fault rather
 # than the caller's. These never embed the upstream message: a rejected
 # credential or an exhausted account is where provider internals concentrate,
@@ -721,7 +726,9 @@ def classify_provider_error(
     # An account quota is the operator's limit, like billing, even where the provider answers 400.
     if _is_account_quota_error(exc):
         return ProviderErrorMapping(status.HTTP_502_BAD_GATEWAY, PROVIDER_ACCOUNT_QUOTA_DETAIL)
-    if status_code in (400, 422):
+    # OpenAI answers some request faults with a 403 (logprobs on a model without
+    # them), which is the caller's to fix and not the gateway's key.
+    if status_code in (400, 422) or is_upstream_request_fault(exc):
         return ProviderErrorMapping(
             status.HTTP_400_BAD_REQUEST, _upstream_message_detail(exc, PROVIDER_BAD_REQUEST_DETAIL)
         )
@@ -803,6 +810,8 @@ def stream_error_code(exc: BaseException) -> str | None:
     code = refusal_code(exc)
     if code is not None or isinstance(exc, HTTPException):
         return code
+    if is_upstream_stream_interrupted(exc):
+        return PROVIDER_STREAM_INTERRUPTED
     if _is_upstream_failure(exc) or classify_provider_error(exc) is not None:
         return PROVIDER_ERROR
     return None
@@ -811,14 +820,45 @@ def stream_error_code(exc: BaseException) -> str | None:
 def stream_error_message(exc: BaseException) -> str | None:
     """The message of the event that ends a stream on ``exc``, or None for the format's fixed one.
 
-    The detail the same failure gets as an HTTP error, where
-    :func:`classify_provider_error` gives it one, since that detail is already
-    safe for the caller to read.
+    The detail the same failure gets as an HTTP error, where that names a cause
+    (:func:`classify_provider_error`, or :func:`provider_failure_detail` for a
+    provider failure it leaves to the 502), since that detail is already safe
+    for the caller to read.
     """
     if isinstance(exc, HTTPException):
         return None
     mapping = classify_provider_error(exc)
-    return mapping.detail if mapping is not None else None
+    if mapping is not None:
+        return mapping.detail
+    if is_upstream_stream_interrupted(exc):
+        return PROVIDER_STREAM_INTERRUPTED_DETAIL
+    return _provider_failure_cause(exc)
+
+
+def provider_failure_detail(exc: BaseException, fallback: str = PROVIDER_ERROR_DETAIL) -> str:
+    """The detail of the 502 for a provider failure :func:`classify_provider_error` leaves unclassified.
+
+    It says what happened upstream (the provider's error status, a connection it
+    closed or never opened, a stream it cut short) and nothing else: no host,
+    message or body, since those are the gateway's own topology. ``fallback`` when
+    the failure says none of that, such as a fault in the gateway itself.
+    """
+    return _provider_failure_cause(exc) or fallback
+
+
+def _provider_failure_cause(exc: BaseException) -> str | None:
+    if isinstance(exc, IncompleteStreamError):
+        return PROVIDER_STREAM_INTERRUPTED_DETAIL
+    kind, status_code = upstream_exception_shape(exc)
+    if status_code is not None:
+        return f"The provider failed the request with HTTP {status_code}"
+    if kind == "conn_err":
+        if is_upstream_connect_failure(exc):
+            return "The gateway could not connect to the provider"
+        return "The provider closed the connection before answering"
+    if kind == "timeout":
+        return "The provider did not answer in time"
+    return None
 
 
 def _is_upstream_failure(exc: BaseException) -> bool:
@@ -917,10 +957,14 @@ class FormatAdapter(Protocol, Generic[ResultT, ChunkT]):
     name: Dialect
     endpoint: str
     stream_format: StreamFormat
-    # The ``type`` of the event that completes a well-formed stream, or None where
-    # a stream may end without one. A stream that ends without it is failed with an
-    # SSE error rather than closed as a success.
-    stream_completion_event: str | None
+
+    def stream_completion(self) -> Callable[[Any], bool] | None:
+        """Says, for one stream, whether it is complete after each chunk, or None where a stream may end anywhere.
+
+        Called once per stream. A stream that ends incomplete is failed with an SSE
+        error rather than closed as a success.
+        """
+        ...
 
     def error(
         self,
@@ -4795,18 +4839,11 @@ def build_streaming_response(
             attach_settlement=_attach_inline_cost if settles_inline else None,
             on_first_chunk=_on_first_chunk,
             error_payload=adapter.stream_error_payload,
-            completes_stream=_completes_stream(adapter.stream_completion_event),
+            completes_stream=adapter.stream_completion(),
         ),
         media_type="text/event-stream",
         headers=headers,
     )
-
-
-def _completes_stream(event_type: str | None) -> Callable[[Any], bool] | None:
-    """A predicate matching chunks whose ``type`` is ``event_type``, or None when there is none."""
-    if event_type is None:
-        return None
-    return lambda chunk: getattr(chunk, "type", None) == event_type
 
 
 def stream_first_chunk_timeout_seconds(config: GatewayConfig, *, tool_mode: bool) -> float:

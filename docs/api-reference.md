@@ -183,6 +183,27 @@ GET /api/v1/usage/summary?group_by_tag=purpose&dimensions=none
 
 Tags are recorded in standalone mode only.
 
+### The `user` field
+
+OpenAI's `user` field is a free-form end-user identifier, and OpenAI examples
+often fill it with one. In Otari it names the user a request is billed to, so it
+is not free-form. A request made with an API key may name only that key's own
+user: any other value is refused with
+`403 'user' field does not match the authenticated API key's user`. A key's
+`reject_user_mismatch` (see [API keys](access-control.md#api-keys)), or the
+deployment-wide setting of the same name, can accept other values instead, in
+which case the value is ignored and spend stays with the key's user. A
+[service key](access-control.md#service-keys-and-end-users) may name its own end
+users, and a master-key request must name the user to bill. Chat Completions
+and Responses never send `user` to the provider.
+
+To tag a request with a free-form end-user ID, put it in `metadata`
+(see [Request tags](#request-tags)) rather than in `user`:
+
+```json
+{"model": "openai:gpt-4o", "messages": [...], "metadata": {"end_user": "customer-42"}}
+```
+
 ### Cost of a failed or interrupted request
 
 A stream that fails mid-response ends in an error event, and one the client
@@ -398,16 +419,24 @@ The provider's `param` and `code` fields are not copied into the response.
 The completion routes and the pass-through routes (embeddings, images, audio,
 moderations, rerank) classify a provider failure the same way. A provider that
 rejects the request (its own 400 or 422) answers 400, and an unknown model 404.
+OpenAI answers some request faults with a 403 instead, with the error type
+`invalid_request_error` (logprobs requested from a model that does not return
+them, an embedding model sent to chat); that is a rejection of the request too,
+and answers 400 with OpenAI's sentence.
 A model whose provider has no such operation (rerank on a chat model, for
 example) or whose SDK has no parameter for a field the caller sent answers 400,
 naming the operation or the field. An OpenAI-compatible client does not retry a
 400 or a 404. The provider's rate limit answers 429 with
 `Otari-Error-Code: upstream_rate_limited` and the provider's `Retry-After` when
 it sent one, which a client may retry after waiting. A provider that refuses the
-gateway's own credential (its 401 or 403) answers 424 with
+gateway's own credential (its 401, or a 403 that is not a rejection of the request) answers 424 with
 `Otari-Error-Code: provider_credential_rejected`, which a client does not retry
 either. A provider timeout answers 504, and any other provider failure 502
-(500 on Messages).
+(500 on Messages), whose detail says what happened upstream and nothing more:
+`The provider failed the request with HTTP 500` (the provider's own status),
+`The provider closed the connection before answering`, or
+`The gateway could not connect to the provider`. A failure Otari cannot place
+keeps the fixed `LLM provider error`.
 When the request named a model alias,
 a provider message that names the alias's target names the alias instead.
 
@@ -453,10 +482,11 @@ reworded.
 | `all_candidates_rejected` | 400 | Every model a routing policy, a catalog ID or the control plane tried rejected the request as invalid | |
 | `pricing_required` | 402 | `require_pricing` is on and the model has no price | |
 | `provider_not_configured` | 424 | The gateway holds no credential for the model's provider, so nothing was sent upstream. Not a 5xx, so a client does not retry it: add the credential in `config.yml`, through the dashboard, or in the environment variable the detail names | |
-| `provider_credential_rejected` | 424 | The provider refused the credential the gateway holds for it (an upstream 401 or 403). It is the gateway's key, not the caller's, so it is never a 401 or 403; and not a 5xx, because no retry makes the key valid. Replace or fix the provider credential. The usage row keeps the provider's own status. A routing policy moves on to its next candidate first, and answers with this code when every candidate either had no credential or had it rejected, and at least one was rejected | |
+| `provider_credential_rejected` | 424 | The provider refused the credential the gateway holds for it (an upstream 401, or a 403 other than one rejecting the request, which is a 400). It is the gateway's key, not the caller's, so it is never a 401 or 403; and not a 5xx, because no retry makes the key valid. Replace or fix the provider credential. The usage row keeps the provider's own status. A routing policy moves on to its next candidate first, and answers with this code when every candidate either had no credential or had it rejected, and at least one was rejected | |
 | `end_user_budget_not_allowed` | 403 | A service key named an end-user budget that is not on its `end_user_budget_ids` | |
 | `invalid_request` | 422 | The request body or a parameter failed schema validation. `detail` lists the failing fields, each with `loc`, `msg` and `type` | |
 | `provider_error` | 200, in a stream's error event only | The provider failed after the stream started, for a reason no other code names | |
+| `provider_stream_interrupted` | 200, in a stream's error event only | The provider's stream ended before it finished: it closed without reporting a `finish_reason`, or the connection carrying it was cut. The output received so far is truncated | |
 
 A `budget_exceeded` refusal's `detail` tells a spent budget (`... has exceeded
 budget limit`) from a request whose estimated cost is larger than the budget it
@@ -479,11 +509,15 @@ the code as `error.code` on Chat Completions and Responses:
 `{"error": {"message": "...", "type": "server_error", "code": "upstream_rate_limited"}}`.
 The status line has already gone out as `200` by then, so the event is the only
 place the failure is named. It carries the code from the table above when one
-applies (`upstream_rate_limited`, `context_length_exceeded`), otherwise
-`provider_error` when the provider failed the stream, including one it ended
-early. Its message is the `detail` the same failure would carry as an HTTP
+applies (`upstream_rate_limited`, `context_length_exceeded`),
+`provider_stream_interrupted` when the provider's stream ended before it
+finished, otherwise `provider_error` when the provider failed the stream. On
+Chat Completions a stream is finished once a choice reports its
+`finish_reason`; one that closes without any, even after sending content, ends
+in this error event rather than in a bare `data: [DONE]`. Its message is the `detail` the same failure would carry as an HTTP
 error where that names a cause (a rejected parameter, the provider's own
-explanation of a rejected request, redacted as described above), and a fixed
+explanation of a rejected request, redacted as described above, or what
+happened upstream, such as the provider's error status), and a fixed
 `An error occurred during streaming` otherwise. An event with no `code` is a
 failure inside the gateway. Either way, a standalone gateway records the
 request's usage row with status `error`.

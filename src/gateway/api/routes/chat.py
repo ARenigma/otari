@@ -29,7 +29,6 @@ from gateway.api.routes._idempotency import IdempotencyGuard, IdempotencyGuardDe
 from gateway.api.routes._normalize import normalize_request_messages, sandbox_requested
 from gateway.api.routes._pipeline import (
     NO_RESOLVABLE_PROVIDER_DETAIL,
-    PROVIDER_ERROR_DETAIL,
     DeclaredTools,
     ErrorKind,
     ToolBackends,
@@ -38,6 +37,7 @@ from gateway.api.routes._pipeline import (
     log_usage,
     prepare_gateway_tools,
     provider_error_headers,
+    provider_failure_detail,
     raise_all_streaming_attempts_failed,
     rate_limit_headers,
     resolve_dispatch_provider,
@@ -176,6 +176,27 @@ class ChatCompletionRequest(derive_request_base(CompletionParams)):  # type: ign
     metadata: RequestMetadata = None
 
 
+def _every_choice_finishes() -> Callable[[ChatCompletionChunk], bool]:
+    """A predicate, for one stream, that holds while every choice seen so far has a ``finish_reason``.
+
+    Every complete chat stream reports one per choice, so with ``n`` above 1 a
+    stream that finishes one choice and cuts another is not complete, in
+    whichever order the choices arrive. A usage-only final chunk has no choices,
+    so it leaves the answer as it was.
+    """
+    seen: set[int] = set()
+    finished: set[int] = set()
+
+    def completes(chunk: ChatCompletionChunk) -> bool:
+        for choice in chunk.choices or ():
+            seen.add(choice.index)
+            if choice.finish_reason:
+                finished.add(choice.index)
+        return bool(finished) and seen <= finished
+
+    return completes
+
+
 class _ChatAdapter:
     """OpenAI Chat Completions edges of the shared pipeline.
 
@@ -186,7 +207,6 @@ class _ChatAdapter:
 
     name = Dialect.CHAT
     stream_format: StreamFormat = OPENAI_STREAM_FORMAT
-    stream_completion_event: str | None = None
     log_success_without_usage = True
 
     def __init__(self, endpoint: str = USAGE_ENDPOINT) -> None:
@@ -214,9 +234,12 @@ class _ChatAdapter:
             )
         return HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=PROVIDER_ERROR_DETAIL,
+            detail=provider_failure_detail(exc),
             headers=with_retry_hint(exc, status.HTTP_502_BAD_GATEWAY, None),
         )
+
+    def stream_completion(self) -> Callable[[Any], bool] | None:
+        return _every_choice_finishes()
 
     def stream_error_payload(self, exc: BaseException) -> str:
         return openai_error_event(self.stream_format, stream_error_code(exc), stream_error_message(exc))

@@ -51,6 +51,7 @@ from gateway.api.routes._pipeline import (
     error_kind_for_status,
     prepare_gateway_tools,
     provider_error_headers,
+    provider_failure_detail,
     raise_all_streaming_attempts_failed,
     release_reservation,
     resolve_dispatch_provider,
@@ -477,6 +478,20 @@ _STREAM_ERROR_MESSAGES = {
     _ERR_RATE_LIMIT: "The upstream provider rate limited the request. Retry the request later.",
 }
 _INCOMPLETE_STREAM_MESSAGE = "The upstream provider ended the stream before completing the message."
+
+
+def _reached_message_stop() -> Callable[[Any], bool]:
+    """A predicate, for one stream, that holds from its ``message_stop`` on."""
+    stopped = False
+
+    def completes(chunk: Any) -> bool:
+        nonlocal stopped
+        stopped = stopped or getattr(chunk, "type", None) == "message_stop"
+        return stopped
+
+    return completes
+
+
 _STREAM_ERROR_STATUS_TYPES = {
     status.HTTP_429_TOO_MANY_REQUESTS: _ERR_RATE_LIMIT,
     529: _ERR_OVERLOADED,
@@ -587,11 +602,6 @@ class _MessagesAdapter:
     name = Dialect.MESSAGES
     endpoint = USAGE_ENDPOINT
     stream_format: StreamFormat = ANTHROPIC_STREAM_FORMAT
-    # Every complete Messages stream ends in ``message_stop``. A non-Anthropic
-    # provider reaches here through any-llm's bridge, which emits nothing at all
-    # for an upstream that produced no chunks, and a tool-loop round can end the
-    # same way after ``message_start`` went out.
-    stream_completion_event: str | None = "message_stop"
     # A successful non-streaming call without provider usage data skips the
     # usage-log row (only the reservation is settled), matching the wire
     # behavior this endpoint has always had.
@@ -618,10 +628,17 @@ class _MessagesAdapter:
             )
         return _anthropic_error(
             _ERR_API,
-            _PROVIDER_ERROR,
+            provider_failure_detail(exc, _PROVIDER_ERROR),
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             with_retry_hint(exc, status.HTTP_500_INTERNAL_SERVER_ERROR, None),
         )
+
+    def stream_completion(self) -> Callable[[Any], bool] | None:
+        # Every complete Messages stream ends in ``message_stop``. A non-Anthropic
+        # provider reaches here through any-llm's bridge, which emits nothing at all
+        # for an upstream that produced no chunks, and a tool-loop round can end the
+        # same way after ``message_start`` went out.
+        return _reached_message_stop()
 
     def stream_error_payload(self, exc: BaseException) -> str:
         if isinstance(exc, IncompleteStreamError):

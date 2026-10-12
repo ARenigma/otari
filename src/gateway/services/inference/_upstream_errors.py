@@ -229,16 +229,12 @@ def upstream_body_message(exc: BaseException) -> str | None:
     it is JSON and read whole otherwise, unless it is markup such as a proxy's
     HTML error page.
     """
-    body = getattr(exc, "body", None)
-    if isinstance(body, str):
-        text = body.strip()
-        if not text.startswith("{"):
-            return text if text and not text.startswith("<") else None
-        try:
-            body = json.loads(text)
-        except ValueError:
-            return None
-    if not isinstance(body, Mapping):
+    raw = getattr(exc, "body", None)
+    if isinstance(raw, str) and not raw.strip().startswith("{"):
+        text = raw.strip()
+        return text if text and not text.startswith("<") else None
+    body = _parsed_body(exc)
+    if body is None:
         return None
     error = body.get("error")
     nested = error.get("message") if isinstance(error, Mapping) else None
@@ -246,6 +242,58 @@ def upstream_body_message(exc: BaseException) -> str | None:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return None
+
+
+def _parsed_body(exc: BaseException) -> Mapping[str, object] | None:
+    """The error body a provider SDK attached to ``exc`` as a mapping, parsing a JSON string, or ``None``."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, str):
+        try:
+            body = json.loads(body.strip())
+        except ValueError:
+            return None
+    return body if isinstance(body, Mapping) else None
+
+
+def _body_error_field(body: Mapping[str, object], name: str) -> str | None:
+    """``error.<name>`` in an error body, else a top-level ``<name>``, when it is a string."""
+    error = body.get("error")
+    for candidate in (error.get(name) if isinstance(error, Mapping) else None, body.get(name)):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
+# Lowercase substrings of a 403's message that point at the gateway's key, its
+# project or its organization rather than at the request, as OpenAI's "Project
+# `proj_...` does not have access to model" does under an invalid_request_error.
+_CREDENTIAL_MESSAGE_PROBES: tuple[str, ...] = ("api key", "api_key", "project", "organization", "scope")
+
+
+def is_upstream_request_fault(exc: BaseException) -> bool:
+    """Whether an upstream 403 refuses the request rather than the credential the gateway sent.
+
+    OpenAI answers some request faults with a 403 whose body's error ``type`` is
+    ``invalid_request_error``: logprobs from a model that does not return them, an
+    embedding model sent to chat. The key is fine; the request is not, and resending it
+    to another provider or with another key changes nothing about that. A 403 of any
+    other type (Anthropic's ``permission_error``, OpenAI's ``request_forbidden``), with
+    no body, or whose message names the key, project or organization stays a credential
+    rejection.
+    """
+    _kind, status_code = upstream_exception_shape(exc)
+    if status_code != 403:
+        return False
+    for current in upstream_exception_chain(exc):
+        body = _parsed_body(current)
+        if body is None:
+            continue
+        if _body_error_field(body, "type") != "invalid_request_error":
+            continue
+        message = (_body_error_field(body, "message") or "").lower()
+        code = (_body_error_field(body, "code") or "").lower()
+        return not any(probe in message or probe in code for probe in _CREDENTIAL_MESSAGE_PROBES)
+    return False
 
 
 def upstream_retry_after(exc: BaseException) -> str | None:
@@ -316,6 +364,28 @@ def is_retry_futile(exc: BaseException) -> bool:
     if any(_carries_upstream_signal(link) for link in links):
         return False
     return any(isinstance(link, _LOCAL_FAULTS) for link in links)
+
+
+def is_upstream_connect_failure(exc: BaseException) -> bool:
+    """Whether the connection to the provider was never opened, as opposed to dropped once open."""
+    return any(isinstance(link, httpx.ConnectError) for link in _causal_chain(exc))
+
+
+def is_upstream_stream_interrupted(exc: BaseException) -> bool:
+    """Whether a provider's stream ended before it finished.
+
+    It ended without the chunk that completes it, or the connection carrying it
+    was cut, which httpx reports as a protocol error (a chunked body cut short)
+    or a network error. A connection that never opened carried no stream.
+    """
+    if is_upstream_connect_failure(exc):
+        return False
+    if upstream_exception_shape(exc)[0] == "conn_err":
+        return True
+    return any(
+        isinstance(link, (IncompleteStreamError, httpx.RemoteProtocolError, httpx.NetworkError))
+        for link in _causal_chain(exc)
+    )
 
 
 def _causal_chain(exc: BaseException) -> Iterator[BaseException]:

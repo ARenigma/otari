@@ -10,13 +10,12 @@ from gateway.services.inference._decisions import (
     request_decision,
     resolve_decision_provider,
 )
-from gateway.services.inference._embeddings import EmbeddingOptionsService
 from gateway.services.inference._idempotency import (
     Admission,
     BlockedCaller,
     Claimed,
-    IdempotencyService,
     IdempotentRequest,
+    InferenceService,
     InvalidKey,
     KeyReused,
     Replay,
@@ -24,7 +23,6 @@ from gateway.services.inference._idempotency import (
     UnknownCaller,
 )
 from gateway.services.inference._lease import keep_claim_alive
-from gateway.services.inference._passthrough_responses import PassthroughResponseService
 from gateway.services.inference._responses_bridge import (
     REASONING_ITEM_ID_PREFIX,
     aresponses_via_chat_completions,
@@ -39,6 +37,9 @@ from gateway.services.inference._upstream_errors import (
     UpstreamErrorKind,
     is_provider_billing_error,
     is_retry_futile,
+    is_upstream_connect_failure,
+    is_upstream_request_fault,
+    is_upstream_stream_interrupted,
     upstream_body_messages,
     upstream_error_message,
     upstream_exception_chain,
@@ -53,12 +54,10 @@ __all__ = [
     "Claimed",
     "DecisionProvider",
     "DecisionProviderError",
-    "EmbeddingOptionsService",
-    "IdempotencyService",
     "IdempotentRequest",
+    "InferenceService",
     "InvalidKey",
     "KeyReused",
-    "PassthroughResponseService",
     "Replay",
     "StillInFlight",
     "UnknownDecisionProviderError",
@@ -79,6 +78,9 @@ __all__ = [
     "UpstreamErrorKind",
     "is_provider_billing_error",
     "is_retry_futile",
+    "is_upstream_connect_failure",
+    "is_upstream_request_fault",
+    "is_upstream_stream_interrupted",
     "upstream_body_messages",
     "upstream_error_message",
     "upstream_exception_chain",

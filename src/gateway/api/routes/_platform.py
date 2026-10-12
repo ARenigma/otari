@@ -43,6 +43,7 @@ from gateway.services.control_plane import ResolveEndpoint, resolve, transport
 from gateway.services.inference import (
     is_provider_billing_error,
     is_retry_futile,
+    is_upstream_request_fault,
     upstream_exception_shape,
 )
 from gateway.services.mcp_loop import MaxToolIterationsExceeded
@@ -260,8 +261,9 @@ def _provider_failure_http_exc(
 
     Reuses the shared provider-error classifier so platform-mode failures get
     the same specific-but-safe statuses (400/404/429/504) the standalone
-    adapters return, instead of a blanket 502. Falls back to a 502 carrying
-    ``fallback_detail`` when the failure has no signal we can safely surface.
+    adapters return, instead of a blanket 502. Falls back to a 502 whose detail
+    says what happened upstream, or is ``fallback_detail`` when the failure has
+    no signal we can safely surface.
     The classifier applies its caller-fault versus gateway-fault detail split,
     so caller-fault details are sanitized provider diagnostics and gateway-fault
     details remain fixed strings. ``attempt_id``, when given, names the attempt
@@ -269,7 +271,7 @@ def _provider_failure_http_exc(
     """
     # Deferred import: _pipeline imports this module, so importing it at module
     # scope would be circular.
-    from gateway.api.routes._pipeline import classify_provider_error, provider_error_headers
+    from gateway.api.routes._pipeline import classify_provider_error, provider_error_headers, provider_failure_detail
 
     mapping = classify_provider_error(exc)
     if mapping is not None:
@@ -284,7 +286,7 @@ def _provider_failure_http_exc(
     return with_attempt_id(
         HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=fallback_detail,
+            detail=provider_failure_detail(exc, fallback_detail),
             headers=with_retry_hint(exc, status.HTTP_502_BAD_GATEWAY, None),
         ),
         attempt_id,
@@ -687,11 +689,19 @@ def _parse_resolve_payload(payload: dict[str, Any]) -> ResolvedRoute:
 
 
 def is_provider_credential_rejection(exc: BaseException) -> bool:
-    """Whether the provider refused the credential the gateway sent (an upstream 401 or 403)."""
+    """Whether the provider refused the credential the gateway sent.
+
+    An upstream 401, or a 403 that is not the provider refusing the request itself
+    (see :func:`is_upstream_request_fault`).
+    """
     if missing_credential(exc) is not None:
         return False
     kind, status_code = upstream_exception_shape(exc)
-    return kind != "timeout" and status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
+    if kind == "timeout":
+        return False
+    if status_code == status.HTTP_401_UNAUTHORIZED:
+        return True
+    return status_code == status.HTTP_403_FORBIDDEN and not is_upstream_request_fault(exc)
 
 
 # The OpenAI and Anthropic SDKs read this header before their own retry rule

@@ -29,7 +29,6 @@ from gateway.api.routes._idempotency import IdempotencyGuardDep, IdempotentRepla
 from gateway.api.routes._normalize import normalize_request_messages, sandbox_requested
 from gateway.api.routes._pipeline import (
     NO_RESOLVABLE_PROVIDER_DETAIL,
-    PROVIDER_ERROR_DETAIL,
     DeclaredTools,
     ErrorKind,
     ToolBackends,
@@ -38,6 +37,7 @@ from gateway.api.routes._pipeline import (
     classify_provider_error,
     prepare_gateway_tools,
     provider_error_headers,
+    provider_failure_detail,
     raise_all_streaming_attempts_failed,
     release_reservation,
     resolve_dispatch_provider,
@@ -253,7 +253,6 @@ class _ResponsesAdapter:
     name = Dialect.RESPONSES
     endpoint = USAGE_ENDPOINT
     stream_format: StreamFormat = RESPONSES_STREAM_FORMAT
-    stream_completion_event: str | None = None
     log_success_without_usage = True
 
     def error(
@@ -275,9 +274,14 @@ class _ResponsesAdapter:
             )
         return HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=PROVIDER_ERROR_DETAIL,
+            detail=provider_failure_detail(exc),
             headers=with_retry_hint(exc, status.HTTP_502_BAD_GATEWAY, None),
         )
+
+    def stream_completion(self) -> Callable[[Any], bool] | None:
+        # Not checked yet: the chat-completions bridge synthesizes the terminal
+        # event whatever the upstream sent, so it cannot tell a cut stream here.
+        return None
 
     def stream_error_payload(self, exc: BaseException) -> str:
         return openai_error_event(self.stream_format, stream_error_code(exc), stream_error_message(exc))
@@ -643,12 +647,9 @@ async def create_response(
     input_payload, codex_extra_body = _codex_extra_body(request_fields.pop("input"), client_metadata)
     stream = bool(request_fields.pop("stream", False))
     request_fields.pop("model", None)
+    # The billed user is the gateway's attribution, as on Chat Completions, and
+    # some providers (Cohere) refuse the field.
     request_fields.pop("user", None)
-    # Standalone mode forwards the resolved user_id to the upstream provider
-    # for analytics; hybrid mode handles attribution server-side via the
-    # correlation id.
-    if not ctx.hybrid_mode and ctx.user_id:
-        request_fields["user"] = ctx.user_id
 
     # base_request_fields is what gets merged with per-attempt creds; it
     # includes ``provider`` and ``input_data`` so each attempt has the full
