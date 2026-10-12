@@ -26,9 +26,10 @@ from gateway.models.budgets import (
     SCOPE_ORGANIZATION,
     SCOPE_WORKSPACE,
     SCOPE_WORKSPACE_MEMBER,
+    ScopeType,
 )
 from gateway.models.tenancy import OrganizationMember, Workspace, WorkspaceMember
-from gateway.repositories.budgets import ScopedBudgetRepository, ScopeIdSets
+from gateway.repositories.budgets import ApplicableCeiling, CeilingUsage, ScopedBudgetRepository, ScopeIdSets
 from gateway.services.budgets._periods import period_window
 from gateway.services.budgets._refusals import BlockedAxis, blocked_on
 from gateway.services.workspace_scope import organization_for_workspace_id, resolve_workspace_id
@@ -83,7 +84,7 @@ class ApplicableBudget:
     """One ceiling a request must pass, and enough of it to report a refusal."""
 
     budget_id: str
-    scope_type: str
+    scope_type: ScopeType
     provider_key_id: str | None
     # The non-USD caps of the budget this ceiling names, carried so a caller can
     # tell whether an axis is capped anywhere without reading every budget again.
@@ -186,12 +187,12 @@ async def _resolve_identities(
     )
 
 
-async def _roll_expired_periods(
-    db: AsyncSession,
-    expired: Sequence[tuple[str, int | None, str | None]],
+async def roll_ended_windows(
+    ceilings_repository: ScopedBudgetRepository,
+    ceilings: Sequence[ApplicableCeiling],
     now: datetime,
 ) -> None:
-    """Start a fresh window on every ceiling whose period has run out.
+    """Start a fresh window on every one of ``ceilings`` whose period has run out by ``now``.
 
     Guarded on ``period_end`` so it is the same lock-free compare-and-swap the
     per-user reset uses: concurrent requests at the boundary all issue it, one
@@ -202,9 +203,12 @@ async def _roll_expired_periods(
     No backfill either way: a ceiling untouched for two months lands in the
     current window with fresh counters, not in each window it slept through.
     """
-    for budget_id, duration, alignment in expired:
+    for ceiling in ceilings:
+        if (period_end := _as_utc(ceiling.period_end)) is None or now < period_end:
+            continue
+        budget_id, alignment = ceiling.scoped_budget_id, ceiling.reset_alignment
         try:
-            window = period_window(now, duration=duration, alignment=alignment)
+            window = period_window(now, duration=ceiling.budget_duration_sec, alignment=alignment)
         except ValueError:
             # Only reachable by a write that went around the API, and the safe
             # direction is to leave the exhausted window in place: not resetting
@@ -215,11 +219,8 @@ async def _roll_expired_periods(
                 alignment,
             )
             continue
-        period_start, period_end = window if window is not None else (now, None)
-        await ScopedBudgetRepository(db).roll_period(
-            budget_id, now=now, period_start=period_start, period_end=period_end
-        )
-    await db.commit()
+        period_start, next_period_end = window if window is not None else (now, None)
+        await ceilings_repository.roll_period(budget_id, now=now, period_start=period_start, period_end=next_period_end)
 
 
 async def applicable_budgets(
@@ -235,40 +236,60 @@ async def applicable_budgets(
     window that has run out is rolled here, before the reservation reads the
     counters, so a request at the boundary is gated on the new period.
     """
-    scopes = await _resolve_identities(db, user_id=user_id, scope=scope)
-    ceilings = await ScopedBudgetRepository(db).list_applicable(scopes, scope.provider_instance)
-    if not ceilings:
-        return ()
+    ceilings = await get_scope_ceilings(db, user_id=user_id, scope=scope)
+    return await roll_and_list_applicable(db, get_provider_ceilings(ceilings, scope.provider_instance))
 
+
+async def roll_and_list_applicable(
+    db: AsyncSession, ceilings: Sequence[ApplicableCeiling]
+) -> tuple[ApplicableBudget, ...]:
+    """Return ``ceilings`` as the budgets a request must pass, in order, after rolling any window that has ended."""
     now = datetime.now(UTC)
-    expired = [
-        (ceiling.scoped_budget_id, ceiling.budget_duration_sec, ceiling.reset_alignment)
-        for ceiling in ceilings
-        if (parsed := _as_utc(ceiling.period_end)) is not None and now >= parsed
-    ]
-    if expired:
-        await _roll_expired_periods(db, expired, now)
+    if any((period_end := _as_utc(ceiling.period_end)) is not None and now >= period_end for ceiling in ceilings):
+        await roll_ended_windows(ScopedBudgetRepository(db), ceilings, now)
+        await db.commit()
+    return tuple(to_applicable_budget(ceiling) for ceiling in ceilings)
 
-    resolved = [
-        ApplicableBudget(
-            budget_id=ceiling.scoped_budget_id,
-            scope_type=ceiling.scope_type,
-            provider_key_id=ceiling.provider_key_id,
-            token_limit=ceiling.token_limit,
-            request_limit=ceiling.request_limit,
-        )
+
+def get_provider_ceilings(
+    ceilings: Sequence[ApplicableCeiling], provider_instance: str | None
+) -> tuple[ApplicableCeiling, ...]:
+    """Return the ceilings among ``ceilings`` that cap every provider or ``provider_instance``, in reservation order.
+
+    Most specific first, provider-narrowed before aggregate within a scope, then the ID, so the order is total.
+    """
+    bound = [
+        ceiling
         for ceiling in ceilings
+        if ceiling.provider_key_id is None or ceiling.provider_key_id == provider_instance
     ]
-    # Most specific first, provider-narrowed before aggregate within a scope, then
-    # the id so the order stays total when two ceilings tie on both.
-    resolved.sort(
-        key=lambda budget: (
-            _SCOPE_PRECEDENCE.get(budget.scope_type, len(_SCOPE_PRECEDENCE)),
-            0 if budget.provider_key_id is not None else 1,
-            budget.budget_id,
+    bound.sort(
+        key=lambda ceiling: (
+            _SCOPE_PRECEDENCE.get(ceiling.scope_type, len(_SCOPE_PRECEDENCE)),
+            0 if ceiling.provider_key_id is not None else 1,
+            ceiling.scoped_budget_id,
         )
     )
-    return tuple(resolved)
+    return tuple(bound)
+
+
+def to_applicable_budget(ceiling: ApplicableCeiling) -> ApplicableBudget:
+    """Return what a hold on ``ceiling`` needs to know of it."""
+    return ApplicableBudget(
+        budget_id=ceiling.scoped_budget_id,
+        scope_type=ceiling.scope_type,
+        provider_key_id=ceiling.provider_key_id,
+        token_limit=ceiling.token_limit,
+        request_limit=ceiling.request_limit,
+    )
+
+
+async def get_scope_ceilings(
+    db: AsyncSession, *, user_id: str, scope: BudgetScopeRequest
+) -> tuple[ApplicableCeiling, ...]:
+    """Return every ceiling on the scopes a request bills to, whichever provider it caps."""
+    scopes = await _resolve_identities(db, user_id=user_id, scope=scope)
+    return tuple(await ScopedBudgetRepository(db).list_applicable(scopes))
 
 
 async def release(
@@ -356,6 +377,18 @@ async def blocked_axis(
     ``amount=None`` skips the dollar axis, which is named "budget".
     """
     usage = await ScopedBudgetRepository(db).get_usage(budget.budget_id)
+    return refused_axis(usage, amount=amount, tokens=tokens, requests=requests, new_request=new_request)
+
+
+def refused_axis(
+    usage: CeilingUsage | None,
+    *,
+    amount: Decimal | None,
+    tokens: int,
+    requests: int,
+    new_request: bool,
+) -> BlockedAxis:
+    """Return the capped axis that left a ceiling with ``usage`` no room, as :func:`blocked_axis` does."""
     if usage is None:
         # The ceiling went away between the refusal and here, so there is no axis
         # to name and guessing one would be worse than saying nothing.
@@ -441,7 +474,13 @@ __all__ = [
     "BudgetScopeRequest",
     "applicable_budgets",
     "blocked_axis",
+    "get_provider_ceilings",
+    "get_scope_ceilings",
+    "refused_axis",
     "release",
     "reserve",
+    "roll_and_list_applicable",
+    "roll_ended_windows",
     "settle",
+    "to_applicable_budget",
 ]

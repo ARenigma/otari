@@ -69,7 +69,13 @@ from gateway.api.deps import (
     get_budget_service,
     verify_api_key_or_master_key,
 )
-from gateway.api.routes._attempts import AdmitAttempt, CandidateCannotServe, PrepareKwargs, walk_attempts
+from gateway.api.routes._attempts import (
+    AdmitAttempt,
+    CandidateCannotServe,
+    DropAdmission,
+    PrepareKwargs,
+    walk_attempts,
+)
 from gateway.api.routes._helpers import apply_input_guardrails, resolve_user_id
 from gateway.api.routes._idempotency import (
     IDEMPOTENCY_KEY_IN_FLIGHT_DETAIL,
@@ -114,6 +120,7 @@ from gateway.core.config import (
 from gateway.core.database import DATABASE_ERRORS, release_session
 from gateway.core.env import otari_env
 from gateway.core.error_codes import (
+    BUDGET_EXCEEDED,
     CONTEXT_LENGTH_EXCEEDED,
     INVALID_MODEL,
     PRICING_REQUIRED,
@@ -143,6 +150,7 @@ from gateway.core.usage import (
     reasoning_tokens_of,
 )
 from gateway.exceptions import TenancyError
+from gateway.exceptions.budget_exceptions import ProviderSpendCeilingExceededError, SpendCeilingExceededError
 from gateway.exceptions.control_plane_exceptions import ControlPlaneError
 from gateway.exceptions.tools_exceptions import (
     CodeExecutionContainerBusyError,
@@ -170,7 +178,7 @@ from gateway.models.api_keys import APIKey
 from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
 from gateway.models.money import to_usd
-from gateway.models.pricing import PriceSource
+from gateway.models.pricing import ModelPricing, PriceSource
 from gateway.models.tools import CodeExecutor, ResolvedCodeExecutionPolicy, WebSearchCredential
 from gateway.models.usage import UsageLog
 from gateway.ports.code_execution_policy_port import CodeExecutionPolicyPort, CodeExecutionPolicyScope
@@ -188,6 +196,8 @@ from gateway.rate_limit import (
 from gateway.services.budgets import (
     ZERO,
     BudgetScopeRequest,
+    EstimateInputs,
+    PricingLookup,
     ReservationHandle,
     estimate_cost,
     estimate_tokens,
@@ -1189,7 +1199,7 @@ class RequestContext:
         workspace_id: uuid.UUID | None = None,
         resolved_provider: ResolvedProvider | None = None,
         plan: CompiledPlan | None = None,
-        estimate_inputs: "EstimateInputs | None" = None,
+        estimate_inputs: EstimateInputs | None = None,
         prices: RequestPrices | None = None,
         request_group_id: str | None = None,
         organization_id: uuid.UUID | None = None,
@@ -1735,6 +1745,7 @@ async def _bill_vision_side_call(
             reserved=False,
             strategy=config.budget_strategy,
             counts_toward_budget=counts_toward_budget,
+            scope_ceilings=(),
         ),
         cost or Decimal(0),
     )
@@ -1773,28 +1784,69 @@ def _row_status(*, error: str | None, attribution: RoutingAttribution | None) ->
     return "error"
 
 
-@dataclass(frozen=True)
-class EstimateInputs:
-    """The inputs a budget estimate was computed from.
+async def move_reservation_for_attempt(ctx: RequestContext, attempt: Attempt) -> None:
+    """Hold the reservation on the budgets of ``attempt``'s provider before ``attempt`` is sent the request.
 
-    Kept on the request context so a fallover can recompute the estimate for a
-    differently priced candidate. Without it, a chain that fell over to a pricier
-    model would run against the cheaper model's reservation and could take spend
-    past a cap the gate had already approved.
+    A budget on that provider alone with no room skips the candidate, because another provider can still serve.
+    A budget on every provider with no room, or a database failure, stops the chain.
     """
+    if ctx.db is None or ctx.uow is None or ctx.reservation is None:
+        return
+    try:
+        await get_budget_service(ctx.uow, ctx.db).move_reservation(
+            ctx.reservation,
+            attempt,
+            estimate_inputs=ctx.estimate_inputs,
+            price_of=_request_price_of(
+                ctx.db, ctx.prices if ctx.prices is not None else RequestPrices(ctx.organization_id)
+            ),
+        )
+    except ProviderSpendCeilingExceededError as exc:
+        raise CandidateCannotServe(spend_ceiling_refusal(exc)) from exc
+    except SpendCeilingExceededError as exc:
+        refusal = spend_ceiling_refusal(exc)
+        logger.warning(
+            "Reservation move refused for candidate %s:%s; stopping the chain",
+            attempt.instance,
+            attempt.model,
+        )
+        raise HTTPException(
+            status_code=refusal.status_code, detail=budget_exhausted_mid_failover_detail(), headers=refusal.headers
+        ) from exc
+    except DATABASE_ERRORS as exc:
+        logger.error(
+            "Could not move the reservation for candidate %s:%s; stopping the chain",
+            attempt.instance,
+            attempt.model,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=BUDGETS_UNAVAILABLE_DETAIL) from exc
 
-    prompt_chars: int
-    max_output_tokens: int | None
-    default_output_tokens: int
-    cache_write_ttl: Literal["5m", "1h"] | None = None
+
+def spend_ceiling_refusal(exc: SpendCeilingExceededError) -> HTTPException:
+    """Render a spend ceiling's refusal as the 403 a reservation it refuses answers with."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=str(exc),
+        headers=error_headers(BUDGET_EXCEEDED, budget_scope=exc.scope_type),
+    )
+
+
+def _request_price_of(db: AsyncSession, prices: RequestPrices) -> PricingLookup:
+    """Return the request's rate for a model, resolved once per model per request."""
+
+    async def price_of(instance: str, model: str) -> ModelPricing | None:
+        resolved = await prices.resolve(db, instance, model)
+        return resolved.pricing if resolved is not None else None
+
+    return price_of
 
 
 async def top_up_reservation_for_attempt(ctx: RequestContext, attempt: Attempt) -> None:
     """Grow the reservation to cover ``attempt`` before dispatching it.
 
-    Called before every candidate after the first. A cheaper candidate is a no-op
-    (``increase_reservation`` ignores a non-positive delta), so the hold only ever
-    grows toward the candidate that actually serves.
+    Called before every candidate after the first.
+    Each leg grows only by what it lacks of the candidate's estimate, so the hold only ever grows.
 
     A refused top-up raises, which the walker treats as terminal: the chain stops
     rather than serving a model the caller cannot afford, and the caller's outer
@@ -1832,14 +1884,11 @@ async def top_up_reservation_for_attempt(ctx: RequestContext, attempt: Attempt) 
         default_output_tokens=ctx.estimate_inputs.default_output_tokens,
         cache_write_ttl=ctx.estimate_inputs.cache_write_ttl,
     )
-    delta = repriced - ctx.reservation.estimate
-    if delta <= ZERO:
-        return
     try:
         await increase_reservation(
             ctx.db,
             ctx.reservation,
-            delta,
+            estimate=repriced,
             model=f"{attempt.instance}:{attempt.model}",
             model_is_free=is_free_pricing(pricing),
             strategy=ctx.config.budget_strategy,
@@ -1853,6 +1902,9 @@ async def top_up_reservation_for_attempt(ctx: RequestContext, attempt: Attempt) 
         raise HTTPException(
             status_code=exc.status_code, detail=budget_exhausted_mid_failover_detail(), headers=exc.headers
         ) from exc
+
+
+BUDGETS_UNAVAILABLE_DETAIL = "Budgets could not be checked for a fallback, so it was not sent."
 
 
 def budget_exhausted_mid_failover_detail() -> str:
@@ -2488,9 +2540,7 @@ async def resolve_request_context(
                 counts_toward_budget=not budget_exempt,
                 # The tenancy-scoped ceilings resolve from the key's workspace and
                 # the identity behind it, and from the provider this attempt is
-                # about to call. A fallover to a different provider keeps the
-                # ceilings resolved here: repricing changes the amount held, not
-                # which caps the request was admitted against.
+                # about to call.
                 scope=BudgetScopeRequest(api_key=api_key, provider_instance=gate_instance),
                 # Already resolved for the pricing gate above, so the free-model
                 # check reads the same rate the estimate was built from.
@@ -2501,17 +2551,7 @@ async def resolve_request_context(
                 # own TTL; the batch, search and pass-through sites take the
                 # module default.
                 reservation_ttl_sec=config.budget_reservation_ttl_sec,
-                # Named by a refusal whose hold does not fit, and only where output
-                # tokens are priced: elsewhere a lower limit cannot shrink the estimate.
-                reserved_output_tokens=(
-                    estimate_inputs.max_output_tokens
-                    if estimate_inputs.max_output_tokens is not None
-                    else estimate_inputs.default_output_tokens
-                )
-                if gate_pricing is not None
-                and not priced_per_request(gate_pricing)
-                and gate_pricing.output_price_per_million > 0
-                else None,
+                reserved_output_tokens=estimate_inputs.get_reserved_output_tokens(gate_pricing),
             )
         except HTTPException as exc:
             # A blocked or over-budget user is refused inside reserve_budget,
@@ -2647,14 +2687,15 @@ async def resolve_request_context(
                     max_output_tokens=estimate_inputs.max_output_tokens,
                     default_output_tokens=estimate_inputs.default_output_tokens,
                 )
-                await increase_reservation(
-                    db,
-                    reservation,
-                    post_estimate - estimate,
-                    additional_tokens=post_estimated_tokens - estimated_tokens,
-                    model=model,
-                    strategy=config.budget_strategy,
-                )
+                if post_estimate > estimate or post_estimated_tokens > estimated_tokens:
+                    await increase_reservation(
+                        db,
+                        reservation,
+                        estimate=post_estimate,
+                        tokens=post_estimated_tokens,
+                        model=model,
+                        strategy=config.budget_strategy,
+                    )
             except HTTPException:
                 await refund_reservation(db, reservation)
                 raise
@@ -4996,6 +5037,20 @@ async def _prepared(
         raise domain_error(adapter, exc) from exc
 
 
+def _candidate_admission(ctx: RequestContext) -> AdmitAttempt:
+    """Admit each candidate of a walk under the budgets and rate limits that bind it.
+
+    Each candidate first moves the reservation onto its provider's budgets, and then passes the rate limits.
+    """
+    admit_model = _model_admission(ctx)
+
+    async def _admit(attempt: Attempt) -> DropAdmission | None:
+        await move_reservation_for_attempt(ctx, attempt)
+        return await admit_model(attempt) if admit_model is not None else None
+
+    return _admit
+
+
 def _failover_kwargs(adapter: FormatAdapter[Any, Any]) -> Callable[[Attempt, dict[str, Any]], dict[str, Any]]:
     """Builds each candidate's kwargs for a plan that can fall over."""
 
@@ -5121,7 +5176,7 @@ async def run_single_attempt_stream(
                     policy_name=ctx.plan.policy_name,
                     build_kwargs=_failover_kwargs(adapter),
                     prepare_kwargs=prepare_kwargs,
-                    admit_attempt=_model_admission(ctx),
+                    admit_attempt=_candidate_admission(ctx),
                     on_absorbed=_absorbed,
                     on_skipped=_skipped,
                     on_terminal=stopped_on.append,
@@ -5908,7 +5963,7 @@ async def run_standalone_non_stream(
                     policy_name=ctx.plan.policy_name,
                     build_kwargs=_failover_kwargs(adapter),
                     prepare_kwargs=prepare_kwargs,
-                    admit_attempt=_model_admission(ctx),
+                    admit_attempt=_candidate_admission(ctx),
                     on_absorbed=_absorbed,
                     on_skipped=_skipped,
                     on_terminal=stopped_on.append,

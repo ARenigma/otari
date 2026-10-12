@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Never
+from typing import Any, Never, cast
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -32,10 +32,10 @@ _ZERO = Decimal(0)
 
 @dataclass(frozen=True)
 class ApplicableCeiling:
-    """A ceiling on one of a request's scopes, with what its budget caps and when its window ends."""
+    """A ceiling on one of a request's scopes, with its provider, its budget's caps and when its window ends."""
 
     scoped_budget_id: str
-    scope_type: str
+    scope_type: ScopeType
     provider_key_id: str | None
     budget_duration_sec: int | None
     reset_alignment: str | None
@@ -313,11 +313,8 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             staged.append(ceiling)
         return staged
 
-    async def list_applicable(self, scopes: ScopeIdSets, provider_key_id: str | None) -> list[ApplicableCeiling]:
-        """Return the ceilings on these scopes that cap every provider or, when one is named, this provider."""
-        provider_match: ColumnElement[bool] = ScopedBudget.provider_key_id.is_(None)
-        if provider_key_id is not None:
-            provider_match = or_(ScopedBudget.provider_key_id == provider_key_id, provider_match)
+    async def list_applicable(self, scopes: ScopeIdSets) -> list[ApplicableCeiling]:
+        """Return the ceilings on these scopes, whichever provider each caps."""
         result = await self.db.execute(
             select(
                 ScopedBudget.id,
@@ -330,9 +327,31 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
                 Budget.request_limit,
             )
             .join(Budget, Budget.budget_id == ScopedBudget.budget_id)
-            .where(_in_scopes(scopes), provider_match)
+            .where(_in_scopes(scopes))
         )
-        return [ApplicableCeiling(*row) for row in result.tuples().all()]
+        # NOTE: The scope predicate matches every row on a known scope type, which is what makes the cast sound.
+        return [
+            ApplicableCeiling(
+                scoped_budget_id=scoped_budget_id,
+                scope_type=cast(ScopeType, scope_type),
+                provider_key_id=provider_key_id,
+                budget_duration_sec=budget_duration_sec,
+                reset_alignment=reset_alignment,
+                period_end=period_end,
+                token_limit=token_limit,
+                request_limit=request_limit,
+            )
+            for (
+                scoped_budget_id,
+                scope_type,
+                provider_key_id,
+                budget_duration_sec,
+                reset_alignment,
+                period_end,
+                token_limit,
+                request_limit,
+            ) in result.tuples().all()
+        ]
 
     async def list_in_scopes(self, scopes: ScopeIdSets, *, skip: int, limit: int) -> list[tuple[ScopedBudget, Budget]]:
         """Return a page of the ceilings on these scopes, each with the budget it names, oldest first."""
@@ -345,6 +364,15 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             .limit(limit)
         )
         return list(result.tuples().all())
+
+    async def lock(self, scoped_budget_ids: Sequence[str]) -> None:
+        """Lock these ceilings until the transaction ends, in the order of their IDs."""
+        await self.db.execute(
+            select(ScopedBudget.id)
+            .where(ScopedBudget.id.in_(list(scoped_budget_ids)))
+            .order_by(ScopedBudget.id)
+            .with_for_update()
+        )
 
     async def member_ceiling(self, member_id: uuid.UUID, provider_key_id: str | None) -> ScopedBudget | None:
         """Return the ceiling capping this membership for this provider, where None means every provider."""
