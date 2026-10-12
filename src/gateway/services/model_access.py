@@ -28,6 +28,7 @@ from gateway.core.error_codes import INVALID_MODEL, MODEL_NOT_ALLOWED, MODEL_NOT
 from gateway.models.api_keys import APIKey
 from gateway.models.users import User
 from gateway.services.alias_service import all_alias_names
+from gateway.services.catalog import dated_builds
 from gateway.services.provider_kwargs import split_selector
 from gateway.services.tenancy.org_provider_key_service import cached_org_key_offer, cached_org_model_restriction
 
@@ -207,16 +208,29 @@ def unresolvable_model_detail(model_selector: str) -> str:
     )
 
 
-def model_not_serving_detail(model: str, key_name: str) -> str:
-    """403 detail for a model an organization offers on a provider key with its serving switch off."""
+def _quoted(names: tuple[str, ...]) -> str:
+    return ", ".join(f"'{name}'" for name in names)
+
+
+def model_not_serving_detail(model: str, key_name: str, *, served_as: tuple[str, ...] = ()) -> str:
+    """403 detail for a model an organization offers on a provider key with its serving switch off.
+
+    ``served_as`` names the dated builds an undated ``model`` stands for, where those are what is switched off.
+    """
+    offered_as = f" as {_quoted(served_as)}" if served_as else ""
     return (
-        f"Model '{model}' is offered on provider key '{key_name}' but not serving. "
+        f"Model '{model}' is offered on provider key '{key_name}'{offered_as} but not serving. "
         "Turn it on under Organization > Providers."
     )
 
 
-def model_not_found_detail(model: str, key_name: str) -> str:
-    """404 detail for a model no provider key of the organization offers."""
+def model_not_found_detail(model: str, key_name: str, *, dated: tuple[str, ...] = ()) -> str:
+    """404 detail for a model no provider key of the organization offers.
+
+    ``dated`` names the dated builds of an undated ``model`` the key does offer, which it cannot choose between.
+    """
+    if dated:
+        return f"Provider key '{key_name}' does not offer '{model}'. It offers {_quoted(dated)}; send one of those."
     return f"Provider key '{key_name}' does not offer '{model}'. Refresh the key's models or add it."
 
 
@@ -252,7 +266,9 @@ def key_model_refusal(allowlist: list[str] | None, canonical_key: str | None, *,
     )
 
 
-def org_model_refusal(workspace_id: uuid.UUID, provider: str, model: str, *, selector: str) -> ModelRefusal | None:
+def org_model_refusal(
+    workspace_id: uuid.UUID, provider: str, model: str, *, selector: str, through_alias: bool
+) -> ModelRefusal | None:
     """Why the active organization key's allow-list turns ``model`` away, or ``None`` when it does not.
 
     Reads the same list the catalog does (`cached_org_model_restriction`), so
@@ -265,6 +281,13 @@ def org_model_refusal(workspace_id: uuid.UUID, provider: str, model: str, *, sel
     the legacy case of a restriction on a key offering no rows, keep the
     not-allowed refusal. ``selector`` is what the caller wrote (an alias, a
     ``provider:model`` pair) and is what the detail names.
+
+    An undated name reaches here only where the catalog could not resolve it
+    to one serving dated build. Where every dated build of it is switched off
+    it is not serving, and otherwise the detail names the builds to choose from.
+    It names them only to a caller who wrote the model: ``through_alias`` says
+    the selector resolved through an alias, a policy or a catalog spelling,
+    whose target the detail keeps off the wire.
     """
     allowed = cached_org_model_restriction(workspace_id, provider)
     if allowed is None or model in allowed:
@@ -277,10 +300,18 @@ def org_model_refusal(workspace_id: uuid.UUID, provider: str, model: str, *, sel
         return not_allowed
     enabled = offer.offered.get(model)
     if enabled is None:
+        builds = dated_builds(model, offer.offered)
+        shown = () if through_alias else tuple(f"{provider}:{build}" for build in builds)
+        if builds and not any(offer.offered[build] for build in builds):
+            return ModelRefusal(
+                code=MODEL_NOT_SERVING,
+                status_code=HTTPStatus.FORBIDDEN,
+                detail=model_not_serving_detail(selector, offer.key_name, served_as=shown),
+            )
         return ModelRefusal(
             code=MODEL_NOT_FOUND,
             status_code=HTTPStatus.NOT_FOUND,
-            detail=model_not_found_detail(selector, offer.key_name),
+            detail=model_not_found_detail(selector, offer.key_name, dated=shown),
         )
     if not enabled:
         return ModelRefusal(
