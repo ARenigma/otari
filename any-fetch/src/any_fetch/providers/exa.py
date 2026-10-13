@@ -10,10 +10,24 @@ Exa could not fetch comes back inside a 200, in ``statuses[].error``, and
 becomes ``FetchedPage.error``, except ``CRAWL_EMPTY_CONTENT``: the page was
 fetched and has no text, which is an empty page, not a failure.
 
+Every field read from a successful answer is checked, so a change on Exa's
+side fails the call rather than degrading it: ``results`` must be there, and
+``statuses``, which Exa documents as optional, needs an entry for the URL,
+``success`` or ``error``, when it has any (the only entry when its id is not
+the URL, which Exa may have normalized); a success needs its page's ``url`` and
+``title``; and a ``text`` must be a string, a
+``publishedDate`` parse and a ``costDollars.total`` be a number when there is
+one. A page without text, which Exa documents as optional, is an empty page. Anything else raises
+``unexpected_response``, an answer with no page and no reason included. Exa
+documents the cost as optional, so a fetch without one reports none, and the
+live tests say so. Fields the adapter does not read are ignored, so a field Exa
+adds breaks nothing.
+
 API: https://exa.ai/docs/reference/get-contents. Pricing, read 2026-10-08:
 https://exa.ai/docs/admin/pricing.
 """
 
+import math
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -102,18 +116,16 @@ class ExaProvider(AnyFetch):
         response = await self._http.request("POST", endpoint, json=payload, headers={"x-api-key": self._api_key or ""})
         body = _body(response)
         results = body.get("results")
-        statuses = body.get("statuses")
-        if not isinstance(results, list):
-            raise ProviderError(self.METADATA.name, response.status_code, "invalid_response")
-        cost = _cost(body)
+        # Exa documents statuses as optional; without them the page in results is the answer.
+        statuses = body.get("statuses", [])
+        if not isinstance(results, list) or not isinstance(statuses, list):
+            raise _unexpected(response)
+        cost = _cost(body, response)
         cost_source: Literal["reported", "none"] = "none" if cost is None else "reported"
 
-        error = _page_error(statuses)
-        item = next((result for result in results if isinstance(result, dict)), None)
-        if error is None and item is None and not _empty_content(statuses):
-            # No page and no reason: nothing says the page was fetched, so it is not an empty page.
-            error = FetchError(tag="no_result")
-        if error is not None:
+        status = _status_of(url, statuses, response) if statuses else None
+        if status is not None and status["status"] == "error":
+            # None for a page fetched with no text, which is an empty page rather than a failure.
             return FetchedPage(
                 url=url,
                 final_url=url,
@@ -121,22 +133,18 @@ class ExaProvider(AnyFetch):
                 content_type="",
                 cost=cost,
                 cost_source=cost_source,
-                error=error,
+                error=_page_error(status, response),
                 raw=body,
             )
-        item = item or {}
-        text = item.get("text")
-        text = text if isinstance(text, str) else ""
-        title = item.get("title")
-        final_url = item.get("url")
+        final_url, title, text, published = _page(results, response)
         return FetchedPage(
             url=url,
-            final_url=final_url if isinstance(final_url, str) and final_url else url,
-            title=title if isinstance(title, str) else "",
+            final_url=final_url,
+            title=title,
             text=text[:limit],
             # Exa returns extracted text and does not say what the page was served as.
             content_type="",
-            published=_published(item.get("publishedDate")),
+            published=published,
             cost=cost,
             cost_source=cost_source,
             # At Exa's own limit there is no character to spare, so text that fills it counts as cut.
@@ -160,35 +168,72 @@ def _body(response: httpx.Response) -> dict[str, Any]:
 
 
 def _tag(value: Any) -> str | None:
+    """Exa's error tag when it looks like a code, else ``None``, so no body text reaches an error."""
     return value if isinstance(value, str) and _TAG.fullmatch(value) else None
 
 
-def _empty_content(statuses: Any) -> bool:
-    """Whether Exa reported the page as fetched with no text."""
-    return isinstance(statuses, list) and any(
-        isinstance(status, dict)
-        and isinstance(status.get("error"), dict)
-        and status["error"].get("tag") == EMPTY_CONTENT
-        for status in statuses
-    )
+def _unexpected(response: httpx.Response) -> ProviderError:
+    """A successful answer that lacks a field Exa documents, or carries one of the wrong type."""
+    return ProviderError(ExaProvider.METADATA.name, response.status_code, "unexpected_response")
 
 
-def _page_error(statuses: Any) -> FetchError | None:
-    """The error Exa reported for the one URL asked for, inside a successful response."""
-    if not isinstance(statuses, list):
-        return None
+def _status_of(url: str, statuses: list[Any], response: httpx.Response) -> dict[str, Any]:
+    """Exa's status for the one URL asked for: the entry with its id, else the only one Exa sent.
+
+    Exa may answer for the URL as it normalized it, so one entry under another
+    id still counts; with several and none for the URL, nothing says which is ours.
+    """
+    checked: list[dict[str, Any]] = []
     for status in statuses:
-        if isinstance(status, dict) and status.get("status") == "error":
-            error = status.get("error")
-            error = error if isinstance(error, dict) else {}
-            if error.get("tag") == EMPTY_CONTENT:
-                return None
-            code = error.get("httpStatusCode")
-            return FetchError(
-                tag=_tag(error.get("tag")) or "fetch_error",
-                status=code if isinstance(code, int) and not isinstance(code, bool) else None,
-            )
-    return None
+        if not isinstance(status, dict) or not isinstance(status.get("id"), str):
+            raise _unexpected(response)
+        if status.get("status") not in ("success", "error"):
+            raise _unexpected(response)
+        checked.append(status)
+    for status in checked:
+        if status["id"] == url:
+            return status
+    if len(checked) != 1:
+        raise _unexpected(response)
+    return checked[0]
+
+
+def _page_error(status: dict[str, Any], response: httpx.Response) -> FetchError | None:
+    """The error Exa reported for the URL inside a successful response; None for a page with no text."""
+    error = status.get("error")
+    if error is None:
+        error = {}
+    if not isinstance(error, dict):
+        raise _unexpected(response)
+    tag, code = error.get("tag"), error.get("httpStatusCode")
+    if tag is not None and not isinstance(tag, str):
+        raise _unexpected(response)
+    if code is not None and (not isinstance(code, int) or isinstance(code, bool)):
+        raise _unexpected(response)
+    if tag == EMPTY_CONTENT:
+        return None
+    return FetchError(tag=_tag(tag) or "fetch_error", status=code)
+
+
+def _page(results: list[Any], response: httpx.Response) -> tuple[str, str, str, datetime | None]:
+    """The page Exa fetched: its url, title, text and date, each checked.
+
+    Exa documents ``url`` and ``title`` on every result and ``text`` as
+    optional, so a page without text is an empty one.
+    """
+    item = results[0] if results else None
+    # A success with no page is an answer Exa does not document.
+    if not isinstance(item, dict):
+        raise _unexpected(response)
+    url, title, text = item.get("url"), item.get("title"), item.get("text", "")
+    if not isinstance(url, str) or not url or not isinstance(title, str) or not isinstance(text, str):
+        raise _unexpected(response)
+    published = None
+    if "publishedDate" in item:
+        published = _published(item["publishedDate"])
+        if published is None:
+            raise _unexpected(response)
+    return url, title, text, published
 
 
 def _published(value: Any) -> datetime | None:
@@ -202,9 +247,16 @@ def _published(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def _cost(body: dict[str, Any]) -> Decimal | None:
+def _cost(body: dict[str, Any], response: httpx.Response) -> Decimal | None:
+    """Exa's ``costDollars.total``, or ``None`` when it sent none."""
     costs = body.get("costDollars")
-    total = costs.get("total") if isinstance(costs, dict) else None
-    if isinstance(total, bool) or not isinstance(total, int | float):
+    if costs is None:
         return None
+    if not isinstance(costs, dict):
+        raise _unexpected(response)
+    total = costs.get("total")
+    if total is None:
+        return None
+    if isinstance(total, bool) or not isinstance(total, int | float) or not 0 <= total < math.inf:
+        raise _unexpected(response)
     return Decimal(str(total))
