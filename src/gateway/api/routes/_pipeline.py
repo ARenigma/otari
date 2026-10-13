@@ -251,6 +251,7 @@ from gateway.services.model_access import (
     org_model_refusal,
     resolve_request_allowlist,
     unresolvable_model_detail,
+    unresolved_model_refusal,
 )
 from gateway.services.policy_store import resolve_effective_policy
 from gateway.services.pricing_service import (
@@ -1434,10 +1435,9 @@ async def resolve_dispatch_provider(
     this rather than ``resolve_provider_selector`` directly.
 
     Falls back to a fresh ``resolve_provider_selector`` call only when
-    ``ctx.resolved_provider`` is ``None``: the rare case where the gate
-    check couldn't parse the selector (an unparseable selector has no
-    pricing, but dispatch still needs its own resolution attempt so any-llm's
-    own error surfaces instead of a stale gate-check failure).
+    ``ctx.resolved_provider`` is ``None``. The request preamble refuses a
+    selector it cannot resolve before dispatch, so this is a guard for a
+    context built without one rather than a path a request normally takes.
 
     Whichever of the two produced it, the result then passes through
     :func:`_serve_from_hosted_credential`, which is where ``model_provider`` is
@@ -2394,8 +2394,8 @@ async def resolve_request_context(
         )
 
         # Tolerate an unparseable / unknown-provider selector here: the key's
-        # allow-list, the budget check below and the downstream provider call
-        # surface it with their own status codes. It simply has no pricing.
+        # allow-list and the budget check below take precedence, and it is
+        # refused as invalid_model once the reservation is placed.
         # Pricing/budget keys on the *instance* name (``instance:model``) while
         # capability detection needs the underlying implementation, so keep both.
         gate_instance: str | None
@@ -2633,6 +2633,29 @@ async def resolve_request_context(
                     tags=tags,
                 )
             raise
+        unresolved = unresolved_model_refusal(gate_instance, selector=model)
+        if unresolved is not None:
+            await refund_reservation(db, reservation)
+            await log_gateway_rejection(
+                db=db,
+                log_writer=log_writer,
+                api_key_id=api_key_id,
+                user_id=user_id,
+                model=gate_model,
+                provider=None,
+                endpoint=adapter.endpoint,
+                detail=unresolved.detail,
+                status_code=unresolved.status_code,
+                started_at=started_at,
+                request_id=request_id,
+                tags=tags,
+            )
+            raise adapter.error(
+                unresolved.status_code,
+                unresolved.detail,
+                error_kind_for_status(unresolved.status_code),
+                headers=error_headers(unresolved.code),
+            )
         # require_pricing is a budget-enforcement safety gate: it refuses a request
         # we cannot price because we then cannot debit it. A budget-exempt key is
         # never debited, so the gate does not apply: the call proceeds and logs
