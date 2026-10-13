@@ -677,7 +677,7 @@ describe("OverviewPage", () => {
     ).toHaveAttribute("href", "/providers")
     expect(screen.getByRole("link", { name: /^error rate/ })).toHaveAttribute(
       "href",
-      "/activity?status=error",
+      "/activity?view=requests&status=error",
     )
   })
 
@@ -1090,7 +1090,7 @@ describe("OverviewIndex for a caller who does not operate the deployment", () =>
     // may hand them off to it.
     expect(screen.getByRole("link", { name: /view all/i })).toHaveAttribute(
       "href",
-      "/activity",
+      "/activity?view=requests",
     )
   })
 
