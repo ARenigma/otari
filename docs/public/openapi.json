@@ -11730,7 +11730,7 @@
             "title": "Effective To"
           },
           "input_price_per_million": {
-            "description": "Price per 1M input tokens",
+            "description": "Price per 1M of the rate's unit: input tokens, requests or images",
             "minimum": 0.0,
             "title": "Input Price Per Million",
             "type": "number"
@@ -11744,7 +11744,7 @@
             "type": "string"
           },
           "output_price_per_million": {
-            "description": "Price per 1M output tokens",
+            "description": "Price per 1M output tokens; unused by a rate in requests or images",
             "minimum": 0.0,
             "title": "Output Price Per Million",
             "type": "number"
@@ -11766,7 +11766,7 @@
           },
           "unit": {
             "default": "tokens",
-            "description": "What the rates are per: tokens for a model, requests or images for a non-token endpoint. A completion model priced per requests is charged one request per successful call.",
+            "description": "What the rates are per: tokens for a model, requests or images for a non-token endpoint, each priced per million. A completion model priced per requests is charged one request per successful call.",
             "enum": [
               "tokens",
               "requests",
@@ -11962,13 +11962,13 @@
             "title": "Effective To"
           },
           "input_price_per_million": {
-            "description": "Price per 1M input tokens",
+            "description": "Price per 1M of the rate's unit: input tokens, requests or images",
             "minimum": 0.0,
             "title": "Input Price Per Million",
             "type": "number"
           },
           "output_price_per_million": {
-            "description": "Price per 1M output tokens",
+            "description": "Price per 1M output tokens; unused by a rate in requests or images",
             "minimum": 0.0,
             "title": "Output Price Per Million",
             "type": "number"
@@ -11990,7 +11990,7 @@
           },
           "unit": {
             "default": "tokens",
-            "description": "What the rates are per: tokens for a model, requests or images for a non-token endpoint. A completion model priced per requests is charged one request per successful call.",
+            "description": "What the rates are per: tokens for a model, requests or images for a non-token endpoint, each priced per million. A completion model priced per requests is charged one request per successful call.",
             "enum": [
               "tokens",
               "requests",
@@ -16945,7 +16945,7 @@
             "title": "Effective At"
           },
           "input_price_per_million": {
-            "description": "Price per 1M input tokens",
+            "description": "Price per 1M of the rate's unit: input tokens, requests or images",
             "minimum": 0.0,
             "title": "Input Price Per Million",
             "type": "number"
@@ -16956,7 +16956,7 @@
             "type": "string"
           },
           "output_price_per_million": {
-            "description": "Price per 1M output tokens",
+            "description": "Price per 1M output tokens; unused by a rate in requests or images",
             "minimum": 0.0,
             "title": "Output Price Per Million",
             "type": "number"
@@ -16978,7 +16978,7 @@
           },
           "unit": {
             "default": "tokens",
-            "description": "What the rates are per: 'tokens' for a model, 'requests' for a gateway-run tool, a moderation call, or a completion model billed per call (USD per million requests), 'images' for image generation.",
+            "description": "What the rates are per: 'tokens' for a model, 'requests' for a gateway-run tool, a moderation call, or a completion model billed per call (USD per million requests), 'images' for image generation (USD per million images).",
             "enum": [
               "tokens",
               "requests",
