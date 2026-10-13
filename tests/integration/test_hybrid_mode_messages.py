@@ -1621,8 +1621,9 @@ def _native_code_execution_route(
     monkeypatch: pytest.MonkeyPatch,
     control_plane_transport: InstallControlPlane,
     policy: dict[str, Any],
+    fallback_provider: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
-    """Route a Messages request to Anthropic under ``policy``.
+    """Route a Messages request to Anthropic under ``policy``, then to ``fallback_provider`` if one is named.
 
     Returns the direct provider calls, the sandbox loop's calls, and the code execution resolves.
     """
@@ -1636,8 +1637,20 @@ def _native_code_execution_route(
     ) -> httpx.Response:
         if url.endswith("/gateway/provider-keys/resolve"):
             attempt = _attempt(0, "3f1b6a1e-0000-4000-8000-0000000000e2", "claude-3-5-sonnet-20241022", "sk-byo")
-            attempt["managed"] = False
-            return httpx.Response(200, json=_resolve_payload([attempt]))
+            attempts = [attempt]
+            if fallback_provider is not None:
+                attempts.append(
+                    _attempt(
+                        1,
+                        "3f1b6a1e-0000-4000-8000-0000000000e3",
+                        "claude-3-5-sonnet-20241022",
+                        "sk-byo-2",
+                        provider=fallback_provider,
+                    )
+                )
+            for each in attempts:
+                each["managed"] = False
+            return httpx.Response(200, json=_resolve_payload(attempts))
         if url.endswith("/gateway/code-execution/resolve"):
             resolved.append(url)
             return httpx.Response(200, json=policy)
@@ -1703,3 +1716,24 @@ def test_a_disabled_workspace_still_has_its_native_declaration_served_by_the_pro
     assert looped == []
     forwarded = {tool.get("type") for tool in direct[0].get("tools") or []}
     assert "code_execution_20250825" in forwarded
+
+
+def test_a_route_whose_head_runs_the_code_itself_leaves_it_there_despite_its_fallback(
+    platform_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    control_plane_transport: InstallControlPlane,
+) -> None:
+    """Each attempt is decided on its own, so only a Bedrock fallback would run the code here.
+
+    The rest of the per-attempt contract is in ``test_hybrid_mode_tools_per_attempt.py``.
+    """
+    direct, looped, resolved = _native_code_execution_route(
+        monkeypatch, control_plane_transport, {"enabled": True}, fallback_provider="bedrock"
+    )
+
+    response = _post_native_code_execution(platform_client)
+
+    assert response.status_code == 200, response.text
+    assert looped == []
+    assert [{tool.get("type") for tool in call.get("tools") or []} for call in direct] == [{"code_execution_20250825"}]
+    assert len(resolved) == 1

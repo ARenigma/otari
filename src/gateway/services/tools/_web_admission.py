@@ -1,27 +1,27 @@
 """Admit the managed web tools one request declared, before any search runs.
 
-The pipeline calls the four steps in order: :func:`claim_web_declarations` decides
-whether the gateway claims a provider's own search or fetch keyword and refuses an
-ambiguous declaration, :func:`extract_web_tools` takes the managed web tools out of the
-request, :func:`check_web_tools_alone` refuses them beside a sandbox or MCP server,
-and :func:`admit_web_access` applies the workspace's web search policy.
+:func:`read_web_declarations` reads who the request asked to run a provider's own
+search or fetch keyword, which ``decide_candidate_tools`` then answers per candidate.
+For the candidates that share one answer, the pipeline calls the rest in order:
+:func:`extract_web_tools` takes the managed web tools out of the request, refusing an
+ambiguous declaration, :func:`check_web_tools_alone` refuses them beside a sandbox or MCP
+server, and :func:`admit_web_access` applies the workspace's web search policy, read once
+for the whole request.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from gateway.exceptions.tools_exceptions import WebSearchInterceptedError, WebToolDeclarationError
-from gateway.models.tools import WebTool
-from gateway.services.tools._native import Dialect
+from gateway.models.tools import CodeExecutor, WebTool
+from gateway.services.tools import _web_fetch_tool, _web_search_tool
+from gateway.services.tools._candidate_tools import ProviderToolDeclaration
 from gateway.services.tools._web_access import WebAccessGrant, apply_web_access_policy
 from gateway.services.tools._web_declarations import (
     WEB_FETCH_HEADER,
     WEB_SEARCH_HEADER,
-    claims_provider_web_fetch,
-    claims_provider_web_search,
     extract_web_fetch_tool,
     extract_web_search_tool,
     first_provider_web_fetch_tool,
@@ -38,7 +38,7 @@ from gateway.services.web_retrieval_policy import MAX_WEB_SEARCH_DOMAINS, read_d
 
 if TYPE_CHECKING:
     from gateway.core.config import GatewayConfig
-    from gateway.ports.web_search_policy_port import WebSearchPolicyPort, WebSearchPolicyScope
+    from gateway.models.tools import ResolvedWebSearchConfig
 
 WEB_SEARCH_HEADER_INVALID_DETAIL = f"{WEB_SEARCH_HEADER} must be one of auto, otari, provider"
 WEB_FETCH_HEADER_INVALID_DETAIL = f"{WEB_FETCH_HEADER} must be one of auto, otari, provider"
@@ -141,8 +141,12 @@ class WebClaims:
     fetch: bool = False
 
 
-def _validate_managed_web_declarations(tools: list[dict[str, Any]] | None, *, claims: WebClaims) -> None:
-    """Reject ambiguous managed declarations before any policy or network I/O."""
+def validate_web_declarations(tools: list[dict[str, Any]] | None, *, claims: WebClaims) -> None:
+    """Refuse a managed web declaration that is ambiguous once ``claims`` are taken, before any policy or network I/O.
+
+    Raises:
+        WebToolDeclarationError: a tool is declared twice, malformed, or named after a managed one.
+    """
     entries = [entry for entry in tools or [] if isinstance(entry, dict)]
     search_count = sum(
         entry.get("type") == "otari_web_search"
@@ -167,22 +171,23 @@ def _validate_managed_web_declarations(tools: list[dict[str, Any]] | None, *, cl
         raise WebToolDeclarationError(WEB_TOOL_RESERVED_NAME_DETAIL)
 
 
-def claim_web_declarations(
+def read_web_declarations(
     tools: list[dict[str, Any]] | None,
     *,
     web_search_header: str | None,
     web_fetch_header: str | None = None,
     config: GatewayConfig,
-    providers: Sequence[str | None],
-    dialect: Dialect,
-) -> WebClaims:
-    """Refuse an ambiguous managed web declaration before any network or database work.
+    uniform: bool,
+) -> list[ProviderToolDeclaration]:
+    """The provider web keywords one request declared, and who it asked to run each.
 
-    ``providers`` is every candidate the request may dispatch to, head first.
-    Returns which of a provider's own web keywords the gateway claims.
+    Only with a backend to run it on does Otari claim a keyword. Interception claims
+    every search keyword, and the request's :data:`WEB_SEARCH_HEADER` cannot take that
+    back; without it the header decides, and without either the keyword is forwarded.
+    ``uniform`` decides every candidate alike, Otari's for all where any one needs it.
 
     Raises:
-        WebToolDeclarationError: a header or a declaration cannot be read as one managed web tool.
+        WebToolDeclarationError: a header cannot be read.
         WebSearchInterceptedError: the header hands the provider a search this deployment runs itself.
     """
     try:
@@ -202,25 +207,22 @@ def claim_web_declarations(
         and web_search_header_conflicts(requested_web_search, intercept=intercept_web_search)
     ):
         raise WebSearchInterceptedError(WEB_SEARCH_INTERCEPTED_DETAIL)
-    claims = WebClaims(
-        search=claims_provider_web_search(
+    declared = (
+        (
+            _web_search_tool.TOOL,
             provider_search_entry,
-            requested=requested_web_search,
-            intercept=intercept_web_search,
-            backend_configured=backend_configured,
-            providers=providers,
-            dialect=dialect,
+            CodeExecutor.OTARI if intercept_web_search else requested_web_search,
+            backend_configured,
         ),
-        fetch=claims_provider_web_fetch(
-            first_provider_web_fetch_tool(tools),
-            requested=requested_web_fetch,
-            fetch_enabled=config.web_fetch_enabled,
-            providers=providers,
-            dialect=dialect,
-        ),
+        (_web_fetch_tool.TOOL, first_provider_web_fetch_tool(tools), requested_web_fetch, config.web_fetch_enabled),
     )
-    _validate_managed_web_declarations(tools, claims=claims)
-    return claims
+    return [
+        ProviderToolDeclaration(
+            tool=tool, entry=entry, preference=preference, backend_configured=configured, uniform=uniform
+        )
+        for tool, entry, preference, configured in declared
+        if entry is not None
+    ]
 
 
 @dataclass(frozen=True)
@@ -235,6 +237,15 @@ class DeclaredWebTools:
     def declared_any(self) -> bool:
         return self.search_tool_entry is not None or self.fetch_tool_entry is not None
 
+    @property
+    def requested_tools(self) -> list[WebTool]:
+        """The managed web tools declared, Search before Fetch."""
+        return [
+            tool
+            for tool, entry in ((WebTool.SEARCH, self.search_tool_entry), (WebTool.FETCH, self.fetch_tool_entry))
+            if entry is not None
+        ]
+
 
 def extract_web_tools(
     tools: list[dict[str, Any]] | None,
@@ -244,17 +255,23 @@ def extract_web_tools(
 ) -> DeclaredWebTools:
     """Take the managed web tools out of ``tools``, refusing one this deployment cannot serve.
 
+    ``claims`` names the provider keywords Otari runs. Each one taken is a copy, since
+    another candidate of the same request may forward the caller's own entry.
+
     Raises:
-        WebToolDeclarationError: a declared web tool is malformed or not served here.
+        WebToolDeclarationError: a declared web tool is ambiguous, malformed or not served here.
     """
-    # A provider-named keyword is claimed only with a backend to run it on, and
-    # then as the request's header or the deployment's interception toggle says.
+    validate_web_declarations(tools, claims=claims)
     search_tool_entry, tools_after_search = extract_web_search_tool(tools, intercept=claims.search)
+    if search_tool_entry is not None:
+        search_tool_entry = dict(search_tool_entry)
     try:
         read_web_search_max_uses(search_tool_entry)
     except ValueError as exc:
         raise WebToolDeclarationError(WEB_SEARCH_MAX_USES_INVALID_DETAIL) from exc
     fetch_tool_entry, remaining_user_tools = extract_web_fetch_tool(tools_after_search, claim=claims.fetch)
+    if fetch_tool_entry is not None:
+        fetch_tool_entry = dict(fetch_tool_entry)
     try:
         read_web_fetch_max_uses(fetch_tool_entry)
     except ValueError as exc:
@@ -290,29 +307,21 @@ def check_web_tools_alone(web: DeclaredWebTools, *, use_sandbox: bool, mcp_serve
         raise WebToolDeclarationError(WEB_SEARCH_CONFLICT_DETAIL)
 
 
-async def admit_web_access(
+def admit_web_access(
     web: DeclaredWebTools,
     *,
-    port: WebSearchPolicyPort,
-    scope: WebSearchPolicyScope,
+    policy: ResolvedWebSearchConfig | None,
     config: GatewayConfig,
 ) -> WebAccessGrant:
-    """Narrow the declared web tools to what the workspace's web search policy permits.
+    """Narrow the declared web tools to what the workspace's web search ``policy`` permits.
 
     Raises:
-        WebSearchPolicyResolutionFailedError: the policy could not be resolved.
         WebAccessRefusedError: the policy refuses the request, and the subclass says why.
         WorkspaceWebSearchDomainsExcludedError: the request's domains share nothing with the workspace's.
     """
-    requested_tools = [
-        tool
-        for tool, entry in ((WebTool.SEARCH, web.search_tool_entry), (WebTool.FETCH, web.fetch_tool_entry))
-        if entry is not None
-    ]
-    policy = await port.resolve(scope, requested_tools)
     return apply_web_access_policy(
         policy,
-        requested_tools=requested_tools,
+        requested_tools=web.requested_tools,
         search_tool_entry=web.search_tool_entry,
         fetch_tool_entry=web.fetch_tool_entry,
         config=config,

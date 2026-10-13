@@ -2,10 +2,11 @@
 
 ``BUILTIN_TOOLS`` lists every such tool, and ``BuiltinTool`` is the shape of one entry.
 ``native_rendering`` answers how one tool's calls are announced in a given wire dialect,
+``decide_candidate_tools`` which of a request's built-in tools Otari runs on each candidate it may be sent to,
 and ``ToolUseBudget`` is the per-request cap on each tool's gateway-run calls.
 ``Tool`` names the ``tools[].type`` values the gateway runs itself.
-``claim_web_declarations``, ``extract_web_tools`` and ``admit_web_access`` admit a request's managed web tools,
-``admit_code_execution`` admits its code execution, ``admit_mcp_servers`` its MCP servers,
+``read_web_declarations``, ``extract_web_tools`` and ``admit_web_access`` admit a request's managed web tools,
+``declare_code_execution`` its code execution, ``admit_mcp_servers`` its MCP servers,
 and ``apply_web_access_policy`` narrows its web access to what its workspace permits.
 ``web_search_max_results_baseline`` is how many search results a request gets when it names none.
 ``search_provider_catalog`` lists the providers a search or fetch tool may name.
@@ -17,10 +18,12 @@ and ``apply_web_access_policy`` narrows its web access to what its workspace per
 """
 
 from gateway.services.tools._builtin_tool import BuiltinTool
+from gateway.services.tools._candidate_tools import CandidateTools, ProviderToolDeclaration, decide_candidate_tools
 from gateway.services.tools._code_execution_admission import (
     CONTAINER_GONE_DETAIL_TEMPLATE,
     AdmittedCodeExecution,
-    admit_code_execution,
+    DeclaredCodeExecution,
+    declare_code_execution,
 )
 from gateway.services.tools._code_execution_declarations import (
     CODE_EXECUTION_HEADER,
@@ -42,6 +45,7 @@ from gateway.services.tools._code_execution_policy import (
     read_code_execution_policy,
 )
 from gateway.services.tools._code_execution_responses import CODE_INTERPRETER_CALL_ID_PREFIX
+from gateway.services.tools._code_execution_tool import TOOL as CODE_EXECUTION_TOOL
 from gateway.services.tools._declarations import Tool, extract_first_matching_tool
 from gateway.services.tools._loop_limits import MAX_TOOL_ITERATIONS_CAP
 from gateway.services.tools._mcp_admission import admit_mcp_servers
@@ -74,10 +78,11 @@ from gateway.services.tools._web_admission import (
     WebClaims,
     admit_web_access,
     check_web_tools_alone,
-    claim_web_declarations,
     extract_web_tools,
+    read_web_declarations,
     read_web_fetch_max_uses,
     read_web_search_max_uses,
+    validate_web_declarations,
 )
 from gateway.services.tools._web_declarations import (
     WEB_FETCH_HEADER,
@@ -109,6 +114,7 @@ __all__ = [
     "read_code_execution_policy",
     "BUILTIN_TOOLS",
     "CODE_EXECUTION_HEADER",
+    "CODE_EXECUTION_TOOL",
     "CODE_INTERPRETER_CALL_ID_PREFIX",
     "CONTAINER_GONE_DETAIL_TEMPLATE",
     "MAX_USES_EXCEEDED_ERROR",
@@ -117,7 +123,10 @@ __all__ = [
     "WEB_FETCH_HEADER",
     "WEB_SEARCH_HEADER",
     "AdmittedCodeExecution",
+    "DeclaredCodeExecution",
     "BuiltinTool",
+    "CandidateTools",
+    "ProviderToolDeclaration",
     "DeclaredWebTools",
     "Dialect",
     "NativeCall",
@@ -128,14 +137,14 @@ __all__ = [
     "WebClaims",
     "WebSearchKeyService",
     "WorkspaceSearchKeys",
-    "admit_code_execution",
     "admit_mcp_servers",
     "admit_web_access",
     "apply_web_access_policy",
     "check_web_tools_alone",
-    "claim_web_declarations",
     "code_execution_declaration_forms",
     "decide_code_executor",
+    "decide_candidate_tools",
+    "declare_code_execution",
     "declares_code_execution",
     "extract_code_execution_tool",
     "extract_first_matching_tool",
@@ -146,9 +155,11 @@ __all__ = [
     "native_rendering",
     "parse_code_execution_header",
     "provider_runs_code_natively",
+    "read_web_declarations",
     "read_web_fetch_max_uses",
     "read_web_search_max_uses",
     "resolve_code_executor_preference",
+    "validate_web_declarations",
     "web_search_declaration_forms",
     "web_search_intercept_enabled",
     "DEFAULT_MAX_RESULTS",

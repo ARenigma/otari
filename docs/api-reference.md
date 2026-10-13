@@ -144,6 +144,19 @@ model, is recorded, debited and reported as `"0.000000"`. The usage row and
 the inline field always agree, and `pricing_source` still says the request was
 priced.
 
+### Who runs a built-in tool
+
+A request that declares code execution, web search or Anthropic's web fetch in a
+provider's own words (`code_execution_<date>`, `code_interpreter`,
+`web_search_<date>`, `web_fetch_<date>`) can say who runs it with the
+`Otari-Code-Execution`, `Otari-Web-Search` and `Otari-Web-Fetch` headers. Each
+takes `auto`, `otari` or `provider`, and each attempt of a fallback chain is
+decided on its own. `auto` keeps the provider's own tool on an attempt whose
+model runs it natively and runs Otari's on one that does not. `otari` always
+runs Otari's. `provider` always forwards the provider's own tool and never uses
+Otari's, so on a fallback to a provider that cannot run it, that attempt fails;
+use `auto` for fallback cover. See [Who runs a tool](tools.md#who-runs-a-tool).
+
 ### Provider-specific fields
 
 A field a provider adds to a chat completion's message beyond the OpenAI schema

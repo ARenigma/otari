@@ -3,12 +3,13 @@
 A provider-native code-execution keyword (``code_execution``,
 ``code_interpreter``, ``code_execution_<date>``) is decided by the request's
 **executor** instead (:class:`gateway.models.tools.CodeExecutor`): the
-provider, Otari's sandbox, or ``auto``, which picks the provider only when it
-runs that tool natively for the dispatched model. ``auto`` is the default, and
-it is what lets a request written against a frontier model's own sandbox keep
-working when the model is swapped for one that has none. The deployment sets
-the default, a workspace policy may pin a value, and :data:`CODE_EXECUTION_HEADER`
-chooses per request where the workspace has not.
+provider, Otari's sandbox, or ``auto``, which picks the provider for each
+attempt whose model runs that tool natively and the sandbox for the rest. ``auto``
+is the default, and it is what lets a request written against a frontier
+model's own sandbox keep working when the model is swapped, or falls back, to
+one that has none. The deployment sets the default, a workspace policy may pin
+a value, and :data:`CODE_EXECUTION_HEADER` chooses per request where the
+workspace has not.
 """
 
 from __future__ import annotations

@@ -7,8 +7,8 @@ Otari can run three tools during Chat Completions, Messages, and Responses:
 - `otari_web_fetch`, a bounded public-web fetcher
 
 Code execution and Search need separate backends. Fetch runs in the gateway.
-Search and Fetch may be combined, but web tools cannot be combined with code
-execution or MCP servers.
+Search and Fetch may be combined, but Otari's web tools cannot be combined with
+its code execution or with MCP servers on one attempt.
 
 Inspect the tools available on a running deployment:
 
@@ -28,8 +28,19 @@ request's `Otari-Web-Search` header says otherwise. Anthropic's web-fetch type
 is forwarded unless the request's [`Otari-Web-Fetch`](#anthropics-web-fetch)
 header says otherwise.
 A provider-native code-execution type is decided by the request's
-[executor](#code-execution-executor). Function tools remain the caller's
-responsibility.
+[executor](#code-execution-executor). Each is decided for every attempt on its
+own, so a fallback can run Otari's tool where the first model ran its own.
+Function tools remain the caller's responsibility.
+
+In [hybrid mode](modes.md) each attempt the platform plans is decided the same
+way, except that none is skipped, because the control plane expects a report for
+every attempt it planned: a request one of whose attempts Otari's tool could
+not serve (the workspace has the tool off, say) is decided as a whole, as it was
+before: search and fetch run on Otari for every attempt if any attempt needs
+it, and code execution follows the first attempt, so a first model that runs
+the code itself keeps it. A refusal then refuses the request. A route with one attempt is dispatched as it
+always was, and the control plane's code-execution and Web Access policies are
+each asked once per request.
 
 ### Web-search interception
 
@@ -43,16 +54,26 @@ support a native search tool.
 Without interception, a request can choose for itself with the
 `Otari-Web-Search` header:
 
-- `auto` runs the declaration on Otari's backend unless every model the request
-  may reach, fallbacks included, can run it natively. Only Anthropic's dated
-  keyword (`web_search_<date>`) on `/api/v1/messages` against an Anthropic
-  model, and OpenAI's `web_search` / `web_search_preview` on `/api/v1/responses`
-  against an OpenAI model, count as native. So a request written for Claude's
-  search keeps searching when its model is swapped for one with no search of its
-  own, and on Messages a dated keyword is still answered with
-  `server_tool_use` / `web_search_tool_result` blocks.
+- `auto` is decided per attempt: the provider's own search on an attempt whose
+  model runs the keyword natively, Otari's on an attempt whose model does not.
+  Only Anthropic's dated keyword (`web_search_<date>`) on `/api/v1/messages`
+  against an Anthropic model, and OpenAI's `web_search` / `web_search_preview`
+  on `/api/v1/responses` against an OpenAI model, count as native. So a request
+  written for Claude's search keeps searching when its model is swapped, or
+  falls back, to one with no search of its own, and on Messages a dated keyword
+  is still answered with `server_tool_use` / `web_search_tool_result` blocks. A
+  request its first model answers natively opens and pays for no search.
 - `otari` always runs it on Otari's backend.
-- `provider` always forwards it.
+- `provider` always forwards it and never runs Otari's search, so on a
+  fallback to a model that cannot run the keyword itself, that attempt fails
+  like any other. Use `auto` to keep the provider's search and run Otari's only
+  on a fallback that needs it.
+
+An attempt that runs Otari's search follows the rules for a gateway-run search
+below. One that cannot be served that way (the workspace has search off, no
+price under `require_pricing`, gateway code execution or `mcp_servers` on the
+same attempt) is skipped and recorded as `Skipped:` in the activity log, and the
+request fails only when no model is left.
 
 The header can add a claim but never remove one: with `web_search_intercept`
 on, every search runs on Otari's backend whatever the header says, and
@@ -61,7 +82,7 @@ search under the workspace's web-search policy and tool pricing.
 
 Whenever Otari runs the search, the rules for a gateway-run search apply: the
 workspace's web-search policy, tool pricing, and the restriction on combining it
-with gateway code execution or `mcp_servers` in one request. All of this
+with gateway code execution or `mcp_servers` on one attempt. All of this
 requires a search backend (`web_search_provider` or `web_search_url`); without
 one, the declaration is forwarded unchanged. A function named `web_search` is
 never claimed.
@@ -73,12 +94,16 @@ default, so a request that falls back to a model with no fetch of its own sends
 it a tool nobody runs. The `Otari-Web-Fetch` header takes it over the same way
 `Otari-Web-Search` does for search, with the same three values:
 
-- `auto` runs the fetch on Otari unless every model the request may reach,
-  fallbacks included, is an Anthropic model on `/api/v1/messages`, the only
-  place the keyword is native. On Messages the result still comes back as
-  `server_tool_use` / `web_fetch_tool_result` blocks.
+- `auto` is decided per attempt: Anthropic's own fetch on an attempt to an
+  Anthropic model on `/api/v1/messages`, the only place the keyword is native,
+  and Otari's on any other. On Messages the result still comes back as
+  `server_tool_use` / `web_fetch_tool_result` blocks. A fallback that cannot be
+  served by Otari's fetch is skipped, as for search.
 - `otari` always runs it on Otari.
-- `provider` always forwards it.
+- `provider` always forwards it and never runs Otari's fetch, so on a
+  fallback to a model that cannot run the keyword itself, that attempt fails
+  like any other. Use `auto` to keep Anthropic's fetch and run Otari's only on
+  a fallback that needs it.
 
 It is a header of its own, not part of `Otari-Web-Search`, because the two
 tools are native in different places and a request may want one taken over and
@@ -271,15 +296,29 @@ declaration asks for:
 
 | Executor | Who runs the code |
 | --- | --- |
-| `auto` (default) | The provider, when it runs that tool natively for the dispatched model and wire format; otherwise Otari's sandbox. A request naming a container Otari minted runs here, since the sandbox it names is here (see [Reusing a sandbox across requests](#reusing-a-sandbox-across-requests)). |
+| `auto` (default) | Decided per attempt: the provider, when the model that attempt goes to runs that tool natively in that wire format; otherwise Otari's sandbox. A request naming a container Otari minted runs here, since the sandbox it names is here (see [Reusing a sandbox across requests](#reusing-a-sandbox-across-requests)). |
 | `otari` | Always Otari's sandbox. |
-| `provider` | Always the provider; the declaration is forwarded untouched. |
+| `provider` | Always the provider; the declaration is forwarded untouched and Otari's sandbox is never used. On a fallback to a model that cannot run it, that attempt fails like any other. Use `auto` to keep the provider's tool and use the sandbox only on a fallback that needs it. |
 
 `auto` is what makes a model swap transparent. An Anthropic Messages request
 carrying `code_execution_20250825` runs natively against an Anthropic model, and
 the same request against an open model runs on the sandbox, with the same
-`server_tool_use` and `code_execution_tool_result` blocks coming back. An
-`anthropic-beta` header travels only as far as it can be honored: against a
+`server_tool_use` and `code_execution_tool_result` blocks coming back.
+
+Fallbacks are decided the same way, one attempt at a time. A routing policy or
+catalog ID that falls back from Claude to Claude on Vertex or Bedrock sends
+Anthropic its own tool, and only if Anthropic fails before any output does the
+fallback run the code on the sandbox; a request Anthropic answers never opens
+or pays for one. A fallback that cannot run on the sandbox (code execution off
+for the workspace, no sandbox price under `require_pricing`, a container id
+from another provider, or Otari's web tools on the same attempt or MCP servers,
+which the sandbox cannot be combined with yet) is skipped rather than refusing
+the whole request, and the request is refused only when no attempt can run. A
+request that also declares `otari_code_execution` decides every attempt alike
+instead, running the code on the sandbox unless every model runs it natively.
+[Hybrid mode](#who-runs-a-tool) skips no attempt.
+
+An `anthropic-beta` header travels only as far as it can be honored: against a
 provider with no Messages API of its own it is dropped rather than refused,
 because a beta names an Anthropic feature that provider was never going to
 serve, and refusing it would make the request fail purely because its model
@@ -295,7 +334,8 @@ The executor also decides where an attached file goes. Code running on Otari's
 sandbox is given the file from Otari's own store, and code running in the
 provider's container is given a short-lived copy at that provider, because such
 a container reads only files that provider holds. Either way the file reaches
-the code rather than only the model. See
+the code rather than only the model, and an attempt that falls back to the other
+place is given the file there. See
 [Files and code execution](files.md#files-and-code-execution).
 
 Three layers choose the executor. The workspace pin wins over both of the
@@ -334,9 +374,10 @@ into Otari's store under the provider's own ID. See
 session still lives for one request, so a `container` id from a previous turn
 addresses the provider's container, not the sandbox.
 
-In hybrid mode the control plane's policy is consulted only once the decision
-already points at the sandbox, so a declaration the provider serves natively is
-never turned into a 403 for a workspace the control plane has not enabled.
+In hybrid mode a workspace the control plane has not enabled still has a
+declaration its provider runs natively served by that provider. A route with a
+fallback that would need the sandbox is decided as a whole, by the first
+attempt (see [Who runs a tool](#who-runs-a-tool)).
 
 **Upgrading from 0.6.** A deployment with `sandbox_url` set that forwarded
 `code_interpreter`, `code_execution_<date>` or `code_execution` to a provider
