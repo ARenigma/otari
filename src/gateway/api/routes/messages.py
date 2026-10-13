@@ -135,26 +135,51 @@ def _merge_anthropic_betas(body_betas: list[str] | None, raw_request: Request) -
 
 
 def _serves_messages_natively(dispatch_model: Any) -> bool:
-    """Whether the dispatched provider has an Anthropic Messages API of its own.
+    """Whether the dispatched model is served by an Anthropic Messages API of its own.
 
-    A bridged provider (``SUPPORTS_MESSAGES`` without ``SUPPORTS_MESSAGES_NATIVE``)
-    goes through any-llm's Messages-to-Completions conversion, which refuses
-    ``betas``. An unknown or unparseable selector answers yes, so nothing is
-    stripped on a guess; any-llm then refuses the beta itself.
+    any-llm answers per model (Bedrock serves only its Claude models natively).
+    A bridged model goes through any-llm's Messages-to-Completions conversion,
+    which refuses ``betas``. An unknown or unparseable selector answers yes, so
+    nothing is stripped on a guess; any-llm then refuses the beta itself.
     """
     if not isinstance(dispatch_model, str) or not dispatch_model:
         return True
     try:
-        provider, _ = AnyLLM.split_model_provider(dispatch_model)
-        return AnyLLM.get_provider_class(provider).SUPPORTS_MESSAGES_NATIVE
+        provider, model = AnyLLM.split_model_provider(dispatch_model)
+        return AnyLLM.get_provider_class(provider).serves_messages_natively(model)
     except Exception:  # noqa: BLE001 - any-llm raises its own types for an unknown provider
         return True
 
 
-def _user_fields(kwargs: dict[str, Any], identifier: str) -> dict[str, Any]:
+# Bedrock refuses a beta it does not support, and any-llm forwards a Claude request's betas as
+# sent, so a beta written for Anthropic would fail a request it never needed. Dropped there as on
+# the bridge until any-llm knows which betas Bedrock accepts.
+_PROVIDERS_WITHOUT_CLIENT_BETAS = frozenset({"bedrock"})
+
+
+def _dispatched_natively(kwargs: dict[str, Any]) -> bool:
+    """Whether this call reaches its model's own Messages API, as any-llm will dispatch it.
+
+    Bedrock serves a Claude request with ``output_format`` through the bridge, whatever the model.
+    """
     model = kwargs.get("model")
-    implementation, _, _ = str(model).partition(":")
-    return messages_user_fields(implementation, identifier, native=_serves_messages_natively(model))
+    provider, _, _ = str(model).partition(":")
+    if provider == "bedrock" and kwargs.get("output_format") is not None:
+        return False
+    return _serves_messages_natively(model)
+
+
+def _forwards_client_betas(kwargs: dict[str, Any]) -> bool:
+    """Whether a client's betas reach the dispatched model: native, and not on a provider that refuses them."""
+    if not _dispatched_natively(kwargs):
+        return False
+    provider, _, _ = str(kwargs.get("model")).partition(":")
+    return provider not in _PROVIDERS_WITHOUT_CLIENT_BETAS
+
+
+def _user_fields(kwargs: dict[str, Any], identifier: str) -> dict[str, Any]:
+    implementation, _, _ = str(kwargs.get("model")).partition(":")
+    return messages_user_fields(implementation, identifier, native=_dispatched_natively(kwargs))
 
 
 def _with_upstream_user(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -166,9 +191,9 @@ def _split_client_betas(kwargs: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Take out the betas no provider should see, and say whether MCP's was among them.
 
     Two never travel. The MCP client capability is the gateway's own, consumed
-    here. And every beta is dropped for a provider with no Messages API of its
-    own, where any-llm refuses the request outright: a beta names an Anthropic
-    feature that provider was never going to serve, so forwarding it would make
+    here. And every beta is dropped for a model served with no Messages API of
+    its own, where any-llm refuses the request outright: a beta names an Anthropic
+    feature that model was never going to serve, so forwarding it would make
     a request stop working purely because its model changed, which is the swap
     `auto` exists to keep invisible.
     """
@@ -177,9 +202,7 @@ def _split_client_betas(kwargs: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         return kwargs, False
 
     saw_mcp_beta = MCP_CLIENT_BETA in betas
-    provider_betas = (
-        [beta for beta in betas if beta != MCP_CLIENT_BETA] if _serves_messages_natively(kwargs.get("model")) else []
-    )
+    provider_betas = [beta for beta in betas if beta != MCP_CLIENT_BETA] if _forwards_client_betas(kwargs) else []
     if provider_betas == betas:
         return kwargs, False
 
