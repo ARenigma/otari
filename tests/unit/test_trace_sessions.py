@@ -6,6 +6,7 @@ roles, block types and ids, never real content.
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -103,8 +104,8 @@ def test_messages_tool_results_answer_the_calls_the_history_named() -> None:
     assert read_turn("messages", history) == TurnFacts(
         opens_turn=False,
         answered=(
-            AnsweredCall(call_id="toolu_1", name="Bash", is_error=False),
-            AnsweredCall(call_id="toolu_2", name="Read", is_error=True),
+            AnsweredCall(call_id="toolu_1", name="Bash", is_error=False, position=2),
+            AnsweredCall(call_id="toolu_2", name="Read", is_error=True, position=2),
         ),
     )
 
@@ -117,7 +118,7 @@ def test_chat_trailing_tool_messages_answer_the_assistants_calls() -> None:
     ]
 
     assert read_turn("chat", history) == TurnFacts(
-        opens_turn=False, answered=(AnsweredCall(call_id="call_1", name="bash", is_error=False),)
+        opens_turn=False, answered=(AnsweredCall(call_id="call_1", name="bash", is_error=False, position=2),)
     )
     assert read_turn("chat", [{"role": "user", "content": "x"}]).opens_turn
 
@@ -129,7 +130,9 @@ def test_responses_function_call_outputs_answer_their_calls() -> None:
         {"type": "function_call_output", "call_id": "call_1", "output": "x"},
     ]
 
-    assert read_turn("responses", items).answered == (AnsweredCall(call_id="call_1", name="shell", is_error=False),)
+    assert read_turn("responses", items).answered == (
+        AnsweredCall(call_id="call_1", name="shell", is_error=False, position=2),
+    )
     assert read_turn("responses", "a prompt").opens_turn
 
 
@@ -181,8 +184,8 @@ def test_answered_calls_become_client_tool_spans_ending_when_this_request_arrive
 
     tools = [span for span in write.spans if span.kind == "tool"]
     assert [(span.span_id, span.tool_name, span.outcome, span.tool_type) for span in tools] == [
-        (client_tool_span_id("toolu_1"), "Bash", "ok", "client"),
-        (client_tool_span_id("toolu_2"), None, "error", "client"),
+        (client_tool_span_id("toolu_1", 0), "Bash", "ok", "client"),
+        (client_tool_span_id("toolu_2", 0), None, "error", "client"),
     ]
     assert all(span.start_time is None and span.end_time is not None for span in tools)
 
@@ -195,8 +198,27 @@ def test_a_client_tool_span_id_never_carries_the_call_id() -> None:
     write = _trace(session=None, turn=turn).finish(status_code=200, completed=True)
 
     (tool,) = [span for span in write.spans if span.kind == "tool"]
-    assert tool.span_id == client_tool_span_id("my private\u0000note")
+    assert tool.span_id == client_tool_span_id("my private\u0000note", 0)
     assert "private" not in tool.span_id and tool.tool_call_id is None
+
+
+def test_a_call_id_reused_later_in_the_session_is_its_own_span_and_a_retry_is_not() -> None:
+    """Some clients number calls per turn (``call_1`` every time); a retry repeats the request exactly."""
+
+    def history(turns: int) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = [{"role": "user", "content": "x"}]
+        for _ in range(turns):
+            items.append({"role": "assistant", "tool_calls": [{"id": "call_1", "function": {"name": "bash"}}]})
+            items.append({"role": "tool", "tool_call_id": "call_1", "content": "x"})
+        return items
+
+    def tool_span_id(items: list[dict[str, Any]]) -> str:
+        write = _trace(session=None, turn=read_turn("chat", items)).finish(status_code=200, completed=True)
+        (tool,) = [span for span in write.spans if span.kind == "tool"]
+        return tool.span_id
+
+    assert tool_span_id(history(1)) == tool_span_id(history(1))
+    assert tool_span_id(history(1)) != tool_span_id(history(2))
 
 
 def test_client_tool_spans_count_against_the_span_budget() -> None:

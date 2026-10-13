@@ -23,11 +23,17 @@ Dialect = Literal["chat", "messages", "responses"]
 
 @dataclass(frozen=True)
 class AnsweredCall:
-    """A tool call the client ran, answered in this request."""
+    """A tool call the client ran, answered in this request.
+
+    ``position`` is the index in the input of the item carrying the result. A
+    retried request repeats it, while a later call reusing the same id answers
+    further down a longer history, so the two stay apart.
+    """
 
     call_id: str
     name: str | None
     is_error: bool
+    position: int = 0
 
 
 @dataclass(frozen=True)
@@ -61,11 +67,11 @@ def _chat(messages: list[Any]) -> TurnFacts:
         return TurnFacts(opens_turn=False)
     if items[-1].get("role") == "user":
         return TurnFacts(opens_turn=True)
-    trailing: list[Mapping[str, Any]] = []
-    for message in reversed(items):
-        if message.get("role") != "tool":
+    trailing: list[tuple[int, Mapping[str, Any]]] = []
+    for position in range(len(items) - 1, -1, -1):
+        if items[position].get("role") != "tool":
             break
-        trailing.append(message)
+        trailing.append((position, items[position]))
     names: dict[str, str | None] = {}
     for message in items:
         if message.get("role") == "assistant":
@@ -74,8 +80,13 @@ def _chat(messages: list[Any]) -> TurnFacts:
                     function = call.get("function")
                     names[call["id"]] = _str(function.get("name")) if isinstance(function, Mapping) else None
     answered = tuple(
-        AnsweredCall(call_id=message["tool_call_id"], name=names.get(message["tool_call_id"]), is_error=False)
-        for message in reversed(trailing)
+        AnsweredCall(
+            call_id=message["tool_call_id"],
+            name=names.get(message["tool_call_id"]),
+            is_error=False,
+            position=position,
+        )
+        for position, message in reversed(trailing)
         if isinstance(message.get("tool_call_id"), str)
     )
     return TurnFacts(opens_turn=False, answered=answered)
@@ -100,7 +111,10 @@ def _messages(messages: list[Any]) -> TurnFacts:
                     names[block["id"]] = _str(block.get("name"))
     answered = tuple(
         AnsweredCall(
-            call_id=block["tool_use_id"], name=names.get(block["tool_use_id"]), is_error=bool(block.get("is_error"))
+            call_id=block["tool_use_id"],
+            name=names.get(block["tool_use_id"]),
+            is_error=bool(block.get("is_error")),
+            position=len(items) - 1,
         )
         for block in results
         if isinstance(block.get("tool_use_id"), str)
@@ -123,19 +137,19 @@ def _responses(input_items: Any) -> TurnFacts:
     last = items[-1]
     if _str(last.get("type", "message")) == "message" and last.get("role") == "user":
         return TurnFacts(opens_turn=True)
-    trailing: list[Mapping[str, Any]] = []
-    for item in reversed(items):
-        if _str(item.get("type")) not in _OUTPUT_TYPES:
+    trailing: list[tuple[int, Mapping[str, Any]]] = []
+    for position in range(len(items) - 1, -1, -1):
+        if _str(items[position].get("type")) not in _OUTPUT_TYPES:
             break
-        trailing.append(item)
+        trailing.append((position, items[position]))
     names = {
         item["call_id"]: _str(item.get("name"))
         for item in items
         if _str(item.get("type")) in _CALL_TYPES and isinstance(item.get("call_id"), str)
     }
     answered = tuple(
-        AnsweredCall(call_id=item["call_id"], name=names.get(item["call_id"]), is_error=False)
-        for item in reversed(trailing)
+        AnsweredCall(call_id=item["call_id"], name=names.get(item["call_id"]), is_error=False, position=position)
+        for position, item in reversed(trailing)
         if isinstance(item.get("call_id"), str)
     )
     return TurnFacts(opens_turn=False, answered=answered)

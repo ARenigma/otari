@@ -71,13 +71,15 @@ def _span(span_id: str, *, kind: str = "step", minutes: int = 0, **fields: Any) 
     )
 
 
-def _write(workspace_id: uuid.UUID, trace_id: str, *spans: SpanRecord, user_id: str = "alice") -> TraceWrite:
+def _write(
+    workspace_id: uuid.UUID, trace_id: str, *spans: SpanRecord, user_id: str = "alice", session_source: str = "harness"
+) -> TraceWrite:
     return TraceWrite(
         workspace_id=workspace_id,
         trace_id=trace_id,
         user_id=user_id,
         api_key_id=None,
-        session_source="harness",
+        session_source=session_source,
         harness="claude-code",
         spans=spans,
     )
@@ -347,3 +349,21 @@ async def test_expire_ends_a_session_kept_alive_past_its_age(
     await store.write((_write(workspace, "long", _span("req-3", minutes=700)),))
     detail = await store.get(TraceScope.deployment(), "long", span_limit=10)
     assert detail is not None and [span.span_id for span in detail.spans] == ["req-3"], "a fresh trace"
+
+
+async def test_the_session_age_limit_leaves_a_request_outside_any_session_to_its_idle_limit(
+    store: TraceService, tenants: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    workspace, _ = tenants
+    await store.write(
+        (
+            _write(workspace, "session", _span("req-1")),
+            _write(workspace, "lone-request", _span("req-2"), session_source="none"),
+        )
+    )
+
+    removed = await store.expire(idle_before=_T0 - timedelta(days=1), started_before=_T0 + timedelta(minutes=1))
+
+    assert removed == 1
+    page = await store.search(TraceScope.deployment(), TraceFilter(), limit=10, offset=0)
+    assert [item.trace_id for item in page.items] == ["lone-request"]

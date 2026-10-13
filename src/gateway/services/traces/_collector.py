@@ -53,13 +53,15 @@ def identifier_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and is_identifier(value) else None
 
 
-def client_tool_span_id(call_id: str) -> str:
+def client_tool_span_id(call_id: str, position: int) -> str:
     """The span id of a tool the client ran: derived from its call id, never the call id itself.
 
-    A call id is whatever the client sent, so it is hashed rather than stored;
-    the same call answered again (a retried request) still lands on one span.
+    A call id is whatever the client sent, so it is hashed rather than stored.
+    The result's position in the input goes in too: the same call answered
+    again (a retried request) still lands on one span, while a later call that
+    reuses the id gets its own.
     """
-    return "call-" + hashlib.sha256(call_id.encode()).hexdigest()[:32]
+    return "call-" + hashlib.sha256(f"{position}:{call_id}".encode()).hexdigest()[:32]
 
 
 def _never_raises[**P](record: Callable[P, None]) -> Callable[P, None]:
@@ -302,7 +304,7 @@ class RequestTrace:
             name = identifier_or_none(call.name)
             spans.append(
                 SpanRecord(
-                    span_id=client_tool_span_id(call.call_id),
+                    span_id=client_tool_span_id(call.call_id, call.position),
                     kind="tool",
                     origin="gateway",
                     name=f"execute_tool:{name}" if name and is_identifier(f"execute_tool:{name}") else "execute_tool",

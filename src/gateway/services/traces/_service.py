@@ -120,10 +120,11 @@ class TraceService:
             return await self._traces.delete_for_user(user_id)
 
     async def expire(self, *, idle_before: datetime, started_before: datetime) -> int:
-        """Delete every trace idle since before ``idle_before``, or started before ``started_before``.
+        """Delete every trace idle since ``idle_before``, and every session's trace started before ``started_before``.
 
         The second bound is what ends a session a client keeps alive: its id then
-        starts a new trace. Returns the traces deleted.
+        starts a new trace. A request outside any session is kept for the first
+        bound alone. Returns the traces deleted.
         """
         async with self._uow:
             return await self._traces.delete_expired(idle_before=idle_before, started_before=started_before)
