@@ -45,6 +45,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import IdentityProviderPortDep, get_config, get_db, record_auth_failure
+from gateway.api.routes._helpers import database_error
 from gateway.api.routes._public_auth import throttle_public_auth
 
 # The same refusal the password and passkey sign-ins carry, imported rather than
@@ -52,6 +53,7 @@ from gateway.api.routes._public_auth import throttle_public_auth
 # wording it differently would tell a person the doors closed for three reasons.
 from gateway.api.routes.auth_session import MAINTENANCE_MODE_REFUSAL
 from gateway.core.config import OAUTH_PROVIDERS, GatewayConfig
+from gateway.core.database import DATABASE_ERRORS
 from gateway.exceptions import TenancyError
 from gateway.exceptions.identity_exceptions import OAuthNotConfiguredError
 from gateway.log_config import logger
@@ -221,13 +223,11 @@ async def authorize(
     try:
         url, state = await authorization_url(config, provider, db=db, flow_secret=flow_secret)
         await db.commit()
-    except SQLAlchemyError:
+    # Not DATABASE_ERRORS: building the URL calls the OAuth client, which can
+    # raise TimeoutError for reasons that are not the database's.
+    except SQLAlchemyError as exc:
         await db.rollback()
-        logger.warning("Failed to record a pending %s sign-in", provider, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error(f"record a pending {provider} sign-in", exc) from None
     apply_flow_cookie(response, flow_secret, secure=request_is_https(request))
     return AuthorizeResponse(authorization_url=url, state=state)
 
@@ -306,13 +306,9 @@ async def callback(
         await OrganizationDomainService(db).auto_join_for_user(identity)
         token, expires_at = await create_dashboard_session(db, config.dashboard_session_ttl_hours, user_id=identity.id)
         await db.commit()
-    except SQLAlchemyError:
+    except DATABASE_ERRORS as exc:
         await db.rollback()
-        logger.warning("Failed to persist a dashboard session on a %s sign-in", provider, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error",
-        ) from None
+        raise database_error(f"persist a dashboard session on a {provider} sign-in", exc) from None
     logger.info("Signed in %s with %s", identity.id, provider_label(provider))
     apply_session_cookie(response, token, expires_at, secure=request_is_https(request))
     return OAuthSessionResponse(
