@@ -1,6 +1,5 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { TraceDetail } from "@/client"
-import { CopyButton } from "@/design-system/actions/CopyButton"
 import { Chip } from "@/design-system/indicators/Chip"
 import { Segmented } from "@/design-system/navigation/Segmented"
 import { SpanDetails } from "@/features/traces/SpanDetails"
@@ -29,33 +28,37 @@ const VIEWS = [
   { value: "log", label: "Log view" },
 ]
 
-// One session: its totals, then its turns as a tree (or every span as a log), and
-// the facts of whichever span is open. Stateless apart from which view and span
-// are open, which belong to this panel and to nobody else.
+// One session, as the body of the panel it opens in: its totals, then its turns
+// as a tree (or every span as a log) beside the facts of whichever span is open.
+// Stateless apart from which view and span are open, which belong to this panel
+// and to nobody else.
 export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
   const [view, setView] = useState<View>("tree")
   const [selectedSpanId, setSelectedSpanId] = useState("")
+  const detailsRef = useRef<HTMLDivElement>(null)
   const { summary } = detail
   const tree = buildTraceTree(detail)
   const selected =
     detail.spans.find((span) => span.span_id === selectedSpanId) ??
     detail.spans[0]
+  const select = (spanId: string) => {
+    setSelectedSpanId(spanId)
+    // On a phone the facts sit below the list, so they are brought into view;
+    // beside it on a desk they already are, and "nearest" leaves them be.
+    detailsRef.current?.scrollIntoView?.({ block: "nearest" })
+  }
   return (
-    <div className="flex min-w-0 flex-col gap-4 p-4">
-      <header className="flex flex-col gap-2">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <header className="flex shrink-0 flex-col gap-2 border-border border-b px-5 py-4">
         <div className="flex min-w-0 items-center gap-2">
-          <h3 className="truncate text-title">{sessionName(summary)}</h3>
+          <h3 className="truncate text-heading">{sessionName(summary)}</h3>
           {detail.state === "active" ? (
             <Chip tone="info" size="sm">
               Active
             </Chip>
           ) : null}
         </div>
-        <div className="flex min-w-0 items-center gap-2 text-caption">
-          <span className="truncate font-mono">{summary.trace_id}</span>
-          <CopyButton value={summary.trace_id} label="trace ID" />
-        </div>
-        <p className="flex flex-wrap gap-x-4 gap-y-1 text-caption tabular-nums">
+        <p className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-caption tabular-nums">
           <span>{formatDateTime(summary.started_at)}</span>
           <span>{formatLatency(sessionDurationMs(summary))}</span>
           <span>{formatCost(summary.cost)}</span>
@@ -70,21 +73,23 @@ export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
             This session has more spans than one view shows.
           </p>
         ) : null}
+        <Segmented
+          label="View"
+          options={VIEWS}
+          value={view}
+          onChange={(next) => setView(next as View)}
+          size="sm"
+        />
       </header>
-      <Segmented
-        label="View"
-        options={VIEWS}
-        value={view}
-        onChange={(next) => setView(next as View)}
-        size="sm"
-      />
-      <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="min-w-0">
+      {/* The tree and the open step side by side, each scrolling on its own,
+          so a long session never scrolls the step being read out of view. */}
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <div className="min-w-0 overflow-y-auto border-border p-3 lg:border-r">
           {view === "tree" ? (
             <SpanTree
               tree={tree}
               selectedSpanId={selected?.span_id ?? ""}
-              onSelect={setSelectedSpanId}
+              onSelect={select}
             />
           ) : (
             <ol className="flex flex-col gap-1" aria-label="Spans in order">
@@ -92,7 +97,7 @@ export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
                 <li key={span.span_id}>
                   <button
                     type="button"
-                    onClick={() => setSelectedSpanId(span.span_id)}
+                    onClick={() => select(span.span_id)}
                     aria-current={
                       span.span_id === selected?.span_id ? "true" : undefined
                     }
@@ -117,7 +122,7 @@ export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
             </ol>
           )}
         </div>
-        <div className="min-w-0">
+        <div ref={detailsRef} className="min-w-0 overflow-y-auto p-5">
           {selected ? <SpanDetails span={selected} /> : null}
         </div>
       </div>

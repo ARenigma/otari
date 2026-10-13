@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { TraceDetailPanel } from "@/features/traces/TraceDetailPanel"
 import { traceDetail } from "@/tests/traceFixtures"
 
@@ -31,5 +31,34 @@ describe("TraceDetailPanel", () => {
 
     const log = screen.getByRole("list", { name: "Spans in order" })
     expect(within(log).getAllByRole("button")).toHaveLength(5)
+  })
+
+  it("collapses a request to hide what ran inside it", async () => {
+    render(<TraceDetailPanel detail={traceDetail()} />)
+    const turn = screen.getByRole("region", { name: "Turn 1" })
+    expect(within(turn).getByText("Bash")).toBeInTheDocument()
+
+    const [collapse] = within(turn).getAllByRole("button", {
+      name: /^Collapse/,
+    })
+    await userEvent.click(collapse)
+
+    expect(within(turn).queryByText("Bash")).not.toBeInTheDocument()
+  })
+
+  it("brings the selected span's facts into view", async () => {
+    // jsdom does not lay out, so it has no scrollIntoView to spy on.
+    const original = Element.prototype.scrollIntoView
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    try {
+      render(<TraceDetailPanel detail={traceDetail()} />)
+
+      await userEvent.click(screen.getByRole("button", { name: /Bash/ }))
+
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" })
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
   })
 })
