@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterator, Mapping
-from typing import Literal
+from typing import Literal, TypeVar
 
 import httpx
 from anthropic import APIConnectionError as _AnthropicAPIConnectionError
@@ -48,8 +48,36 @@ _BILLING_MESSAGE_PROBES: tuple[str, ...] = (
 # never an upstream: the request fails the same way however often it is resent.
 _LOCAL_FAULTS: tuple[type[BaseException], ...] = (LookupError, AttributeError, TypeError)
 
+T = TypeVar("T")
+
 
 UpstreamErrorKind = Literal["timeout", "conn_err"]
+
+EMPTY_COMPLETION_DETAIL = "The provider returned a completion with no choices"
+
+
+class EmptyCompletionError(Exception):
+    """The provider answered a chat completion with no choices.
+
+    A success status around nothing to return is a provider failure, not an
+    answer: the attempt is recorded as failed and a routing policy moves on to
+    its next candidate.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(EMPTY_COMPLETION_DETAIL)
+
+
+def require_choices(completion: T) -> T:
+    """Return ``completion``, or raise :class:`EmptyCompletionError` when it carries no choices."""
+    if not getattr(completion, "choices", None):
+        raise EmptyCompletionError
+    return completion
+
+
+def is_empty_completion(exc: BaseException) -> bool:
+    """Whether ``exc`` is a provider's completion that came back with no choices."""
+    return any(isinstance(link, EmptyCompletionError) for link in upstream_exception_chain(exc))
 
 
 def _error_status_code(exc: BaseException) -> int | None:
