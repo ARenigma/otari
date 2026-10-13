@@ -2,8 +2,8 @@
 
 Otari serves an OpenAPI document at `/api/v1/openapi.json` and interactive API
 docs at `/api/v1/docs` by default. The repository also commits the generated
-[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/v0.21.0/docs/public/openapi.json) and
-[Postman collection](https://github.com/mozilla-ai/otari/blob/v0.21.0/docs/public/otari.postman_collection.json). Those generated
+[OpenAPI specification](https://github.com/mozilla-ai/otari/blob/v0.22.0/docs/public/openapi.json) and
+[Postman collection](https://github.com/mozilla-ai/otari/blob/v0.22.0/docs/public/otari.postman_collection.json). Those generated
 artifacts are the source of truth for paths, parameters, and schemas.
 
 The default server address is `http://localhost:8000`. The API is mounted at
@@ -170,10 +170,11 @@ wins over a flat one of the same name. The limits are OpenAI's: up to 16 string
 pairs, keys up to 64 characters and values up to 512. A null value is ignored,
 and anything else is refused with a 422.
 
-What reaches the provider depends on the surface. Chat Completions never
-forwards `metadata`. Messages forwards only `metadata.user_id`, the one key
-Anthropic accepts there, which also names the billed user, as it always has, and
-is not a tag. Responses forwards `metadata` as before, minus
+What reaches the provider depends on the surface. Chat Completions and Messages
+never forward the caller's `metadata`. On Messages, `metadata.user_id` names the
+billed user, as it always has, and is not a tag; the provider gets an
+[end-user identifier](configuration.md#end-user-identifiers) derived from it in
+its place. Responses forwards `metadata` as before, minus
 `spend_logs_metadata`, because the Responses API stores it.
 
 The usage endpoints (`GET /api/v1/usage`, `/count`, `/summary`, `/series`, and
