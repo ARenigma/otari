@@ -381,3 +381,26 @@ async def test_a_series_returns_only_the_newest_buckets_however_wide_its_window(
     series = await store.series(TraceScope.deployment(), TraceFilter(), bucket="hour")
 
     assert [point.bucket for point in series] == ["2026-10-07T13:00:00Z", "2026-10-07T14:00:00Z"]
+
+
+async def test_a_series_never_reads_traces_older_than_its_buckets_can_reach(
+    store: TraceService, tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, _ = tenants
+    monkeypatch.setattr(trace_service_module, "MAX_SERIES_BUCKETS", 2)
+    await store.write(tuple(_write(workspace, f"s{hour}", _span("req", minutes=60 * hour)) for hour in (0, 2, 3)))
+    statements: list[str] = []
+
+    def capture(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        if "GROUP BY" in statement:
+            statements.append(statement)
+
+    event.listen(Engine, "before_cursor_execute", capture)
+    try:
+        series = await store.series(TraceScope.deployment(), TraceFilter(), bucket="hour")
+    finally:
+        event.remove(Engine, "before_cursor_execute", capture)
+
+    assert [point.bucket for point in series] == ["2026-10-07T14:00:00Z", "2026-10-07T15:00:00Z"]
+    [grouped] = statements
+    assert "started_at >=" in grouped

@@ -134,7 +134,8 @@ class TraceService:
     ) -> tuple[TraceBucket, ...]:
         """Count the scope's matching traces per bucket of their start, oldest first, populated buckets only.
 
-        At most :data:`MAX_SERIES_BUCKETS`, the newest, whatever window the filters leave open.
+        At most :data:`MAX_SERIES_BUCKETS`, reaching back from the newest trace, whatever window the filters
+        leave open.
         """
         async with self._uow:
             rows = await self._traces.bucket_counts(

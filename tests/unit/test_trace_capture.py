@@ -241,11 +241,53 @@ async def test_an_erased_users_queued_traces_are_never_written() -> None:
     writer.submit(_write(2, "theirs", user_id="bob"))
     writer.submit(_write(3, "mine"))
 
-    assert writer.discard_user("bob") == 2
+    assert await writer.erase_user("bob") == 2
     await writer.start()
     await writer.stop()
 
     assert [t.trace_id for call in store.write.await_args_list for t in call.args[0]] == ["mine"]
+
+
+@pytest.mark.asyncio
+async def test_what_an_erased_users_running_requests_submit_later_is_refused() -> None:
+    store = AsyncMock()
+    store.write.return_value = WriteResult()
+    writer = _writer(store, interval_s=60.0, batch_spans=100)
+    before = _dropped("erased")
+
+    await writer.erase_user("bob")
+    writer.submit(_write(2, "late", user_id="bob"))
+    writer.submit(_write(3, "mine"))
+    await writer.start()
+    await writer.stop()
+
+    assert _dropped("erased") - before == 2
+    assert [t.trace_id for call in store.write.await_args_list for t in call.args[0]] == ["mine"]
+
+
+@pytest.mark.asyncio
+async def test_erasing_a_user_waits_for_the_batch_in_flight() -> None:
+    """A batch already handed to the store commits; erasure must come after it, so it deletes it."""
+    writing, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(traces: tuple[TraceWrite, ...]) -> WriteResult:
+        writing.set()
+        await release.wait()
+        return WriteResult()
+
+    store = AsyncMock()
+    store.write.side_effect = slow
+    writer = _writer(store, batch_spans=2)
+    await writer.start()
+    writer.submit(_write(2, "theirs", user_id="bob"))
+    await writing.wait()
+
+    erasing = asyncio.create_task(writer.erase_user("bob"))
+    await asyncio.sleep(0.05)
+    assert not erasing.done()
+    release.set()
+    await erasing
+    await writer.stop()
 
 
 @pytest.mark.asyncio

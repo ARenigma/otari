@@ -55,3 +55,31 @@ def test_a_client_tool_starts_when_the_step_that_ended_last_before_it_ended() ->
 
     assert (filled.parent_span_id, filled.start_time) == ("long", _T0 + timedelta(seconds=9))
     assert approximate == {"call-1"}
+
+
+def test_each_client_tool_in_a_long_session_starts_after_the_step_that_asked_for_it() -> None:
+    """A long session answers a tool every step; each must find its own asker, in any order."""
+    steps = [
+        replace(
+            _span(f"req-{n}", "step"),
+            start_time=_T0 + timedelta(seconds=10 * n),
+            end_time=_T0 + timedelta(seconds=10 * n + 5),
+        )
+        for n in range(2_500)
+    ]
+    tools = [
+        SpanRecord(
+            span_id=f"call-{n}",
+            kind="tool",
+            origin="gateway",
+            name="x",
+            outcome="ok",
+            end_time=_T0 + timedelta(seconds=10 * n + 7),
+        )
+        for n in range(2_500)
+    ]
+
+    filled, approximate = _fill_client_tool_starts(tools[::-1], steps[::-1])
+
+    assert len(approximate) == 2_500
+    assert all(span.parent_span_id == f"req-{span.span_id.removeprefix('call-')}" for span in filled)

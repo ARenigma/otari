@@ -14,6 +14,7 @@ of the answer as soon as it is stored and no stored state can disagree with it:
   A failed attempt a fallback recovered does not fail anything.
 """
 
+from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -42,14 +43,16 @@ def _fill_client_tool_starts(spans: list[SpanRecord], steps: list[SpanRecord]) -
     """Give each client-run tool the end of the step before the one that answered it as its start."""
     approximate: set[str] = set()
     filled: list[SpanRecord] = []
+    # By end, not start: the step that ended last, which a long or overlapping step may not be the last to start.
+    ended = sorted(
+        ((step.end_time, step.span_id, step) for step in steps if step.end_time is not None), key=lambda e: e[:2]
+    )
+    ends = [end for end, _, _ in ended]
     for span in spans:
         if span.kind == "tool" and span.start_time is None and span.end_time is not None:
-            before = [step for step in steps if step.end_time is not None and step.end_time <= span.end_time]
-            if before:
-                # The step that ended last, which a long or overlapping step may not be the last to start.
-                asker = max(before, key=lambda step: (step.end_time, step.span_id))
-                start = asker.end_time
-                assert start is not None
+            position = bisect_right(ends, span.end_time)
+            if position:
+                start, _, asker = ended[position - 1]
                 duration = max(0, round((span.end_time - start).total_seconds() * 1000))
                 span = replace(span, start_time=start, duration_ms=duration, parent_span_id=asker.span_id)
                 approximate.add(span.span_id)

@@ -419,11 +419,11 @@ async def delete_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not erase this user's telemetry; the user was not deleted",
         ) from None
-    # Agent traces follow the same rule, for the same reason. What the trace writer
-    # still holds for the user goes first, or it would be written after the purge.
+    # Agent traces follow the same rule, for the same reason. The trace writer
+    # stops writing the user's traces first, or it would write some after the purge.
     trace_writer: TraceWriter | None = getattr(request.app.state, "trace_writer", None)
     if trace_writer is not None:
-        trace_writer.discard_user(user_id)
+        await trace_writer.erase_user(user_id)
     try:
         await traces.purge_user(user_id)
     except Exception:

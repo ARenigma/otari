@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import astuple, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal, Never, cast
 
@@ -198,14 +198,23 @@ class TraceRepository(BaseRepository[Trace, Never, Never]):
     ) -> list[tuple[str, int, int]]:
         """Return ``(bucket, succeeded, failed)`` per populated bucket of trace start, oldest first.
 
-        Only the newest ``limit`` buckets: the query orders newest first so the
-        limit keeps the recent end, and the result is turned around.
+        Only buckets within ``limit`` of the newest trace's: traces started before
+        that are never read, so an unbounded window costs no more than a bounded one.
         """
+        conditions = _scoped(workspace_ids, _conditions(query))
+        newest = utc_bound(await self.db.scalar(select(func.max(Trace.started_at)).where(*conditions)))
+        if newest is None:
+            return []
+        # The start of the oldest bucket that can be returned, so no bucket is counted in part.
+        newest_bucket = newest.replace(minute=0, second=0, microsecond=0)
+        if bucket == "day":
+            newest_bucket = newest_bucket.replace(hour=0)
+        floor = newest_bucket - (limit - 1) * _GRAIN[bucket]
         key = bucket_expr(dialect_name(self.db), bucket, Trace.started_at).label("bucket")
         failed = func.sum(case((Trace.error_count > 0, 1), else_=0))
         result = await self.db.execute(
             select(key, func.count(), failed)
-            .where(*_scoped(workspace_ids, _conditions(query)))
+            .where(*conditions, Trace.started_at >= floor)
             .group_by(key)
             .order_by(key.desc())
             .limit(limit)
@@ -250,6 +259,9 @@ class TraceRepository(BaseRepository[Trace, Never, Never]):
         result = cast("CursorResult[Any]", await self.db.execute(delete(Trace).where(condition)))
         await self.db.flush()
         return int(result.rowcount or 0)
+
+
+_GRAIN = {"hour": timedelta(hours=1), "day": timedelta(days=1)}
 
 
 def _scoped(

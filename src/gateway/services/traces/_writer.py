@@ -49,6 +49,10 @@ QUEUED_SPANS = Gauge(
 )
 
 
+# How long an erased user's new traces are refused: longer than any request of
+# theirs that was already running when they were erased can still take.
+_ERASED_FOR_S = 3600.0
+
 # Stores one batch and says how its spans were accounted for.
 StoreTraces = Callable[[tuple[TraceWrite, ...]], Awaitable[WriteResult]]
 
@@ -85,14 +89,23 @@ class TraceWriter:
         self._queue: deque[TraceWrite] = deque()
         self._queued_spans = 0
         self._ready = asyncio.Event()
+        self._idle = asyncio.Event()
+        self._idle.set()
+        self._erased: dict[str, float] = {}
         self._task: asyncio.Task[None] | None = None
 
-    def discard_user(self, user_id: str) -> int:
-        """Drop every queued trace a user owns, before their traces are erased; return the spans dropped.
+    async def erase_user(self, user_id: str) -> int:
+        """Keep a user's traces from being written again, before what is stored is erased.
 
-        Erasure deletes what is stored, so what is still waiting here would otherwise
-        be written after it and bring the user's traces back.
+        Erasure deletes what is stored, so anything of theirs this writer would write
+        afterwards brings their traces back: what is queued is dropped, the batch in
+        flight is waited for (it commits before the erasure, which then deletes it),
+        and what their still-running requests submit later is refused. Returns the
+        queued spans dropped.
         """
+        now = monotonic()
+        self._erased = {erased: at for erased, at in self._erased.items() if now - at < _ERASED_FOR_S}
+        self._erased[user_id] = now
         kept = deque(trace for trace in self._queue if trace.user_id != user_id)
         dropped = self._queued_spans - sum(len(trace.spans) for trace in kept)
         self._queue = kept
@@ -100,7 +113,13 @@ class TraceWriter:
         QUEUED_SPANS.set(self._queued_spans)
         if dropped:
             SPANS_DROPPED.labels(reason="erased").inc(dropped)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._idle.wait(), timeout=self._write_timeout)
         return dropped
+
+    def _is_erased(self, user_id: str | None) -> bool:
+        erased_at = self._erased.get(user_id) if user_id is not None else None
+        return erased_at is not None and monotonic() - erased_at < _ERASED_FOR_S
 
     def submit(self, trace: TraceWrite, *, truncated: int = 0) -> None:
         """Queue one request's spans, or drop them all when they do not fit. Never waits."""
@@ -108,6 +127,9 @@ class TraceWriter:
             SPANS_DROPPED.labels(reason="truncated").inc(truncated)
         size = len(trace.spans)
         if not size:
+            return
+        if self._is_erased(trace.user_id):
+            SPANS_DROPPED.labels(reason="erased").inc(size)
             return
         if self._queued_spans + size > self._max_queued:
             SPANS_DROPPED.labels(reason="queue_full").inc(size)
@@ -146,7 +168,11 @@ class TraceWriter:
                 await asyncio.wait_for(self._ready.wait(), timeout=self._interval)
             self._ready.clear()
             while self._queue:
-                await self._write(self._take_batch(), timeout=self._write_timeout, on_timeout="timeout")
+                self._idle.clear()
+                try:
+                    await self._write(self._take_batch(), timeout=self._write_timeout, on_timeout="timeout")
+                finally:
+                    self._idle.set()
 
     def _take_batch(self) -> tuple[TraceWrite, ...]:
         batch: list[TraceWrite] = []
