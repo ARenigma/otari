@@ -50,6 +50,7 @@
   * [Organization guardrails](api-endpoints/organization-guardrails.md)
   * [Organization keys](api-endpoints/organization-keys.md)
   * [Organization pricing](api-endpoints/organization-pricing.md)
+  * [Organization traces](api-endpoints/organization-traces.md)
   * [Organization usage](api-endpoints/organization-usage.md)
   * [Organizations](api-endpoints/organizations.md)
   * [OTel](api-endpoints/otel.md)
@@ -69,6 +70,7 @@
   * [Settings](api-endpoints/settings.md)
   * [Tool settings](api-endpoints/tool-settings.md)
   * [Tools](api-endpoints/tools.md)
+  * [Traces](api-endpoints/traces.md)
   * [Usage](api-endpoints/usage.md)
   * [Users](api-endpoints/users.md)
   * [Web search](api-endpoints/web-search.md)
@@ -88,6 +90,7 @@
 * [Use with Codex](use-with-codex.md)
 * [Use with opencode](use-with-opencode.md)
 * [Use with a ChatGPT subscription](chatgpt-subscription.md)
+* [Agent traces](traces.md)
 * [Importing external usage](external-usage.md)
 * [SDK compatibility](sdk-compatibility.md)
 
