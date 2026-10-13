@@ -581,15 +581,17 @@ def test_the_config_surface_needs_the_master_key(
     assert with_an_api_key.status_code == 401
 
 
-def test_a_ceiling_the_backend_could_never_honor_is_refused(
+def test_a_ceiling_above_20_is_stored_and_one_its_column_cannot_hold_is_refused(
     client: TestClient,
     master_key_header: dict[str, str],
 ) -> None:
+    """The gateway sets no ceiling of its own (decision 65); the column is a 32-bit integer."""
     workspace_id = _default_workspace_id(client, master_key_header)
 
+    assert _set_config(client, master_key_header, workspace_id, enabled=True, max_results=500)["max_results"] == 500
     response = client.put(
         f"{API_ROOT}/workspaces/{workspace_id}/web-search",
-        json={"enabled": True, "max_results": 500},
+        json={"enabled": True, "max_results": 2**31},
         headers=master_key_header,
     )
 
@@ -744,7 +746,7 @@ def test_the_direct_search_endpoint_honors_the_same_veto(
         headers=master_key_header,
     ).json()
 
-    with patch("gateway.api.routes.search.run_search", new=AsyncMock()) as ran:
+    with patch("gateway.services.search_backend.run_search", new=AsyncMock()) as ran:
         response = client.post(
             f"{API_ROOT}/search/stub-search",
             json={"query": "anything"},
@@ -787,7 +789,7 @@ def test_invalid_legacy_domain_rule_returns_503_from_direct_search(
         headers=master_key_header,
     ).json()
 
-    with patch("gateway.api.routes.search.run_search", new=AsyncMock()) as ran:
+    with patch("gateway.services.search_backend.run_search", new=AsyncMock()) as ran:
         response = client.post(
             f"{API_ROOT}/search/invalid-config-search",
             json={"query": "anything"},
@@ -815,7 +817,7 @@ def test_the_direct_search_endpoint_is_unchanged_for_a_workspace_with_no_row(
     from gateway.services.search_backend import SearchHit, SearchOutcome
 
     outcome = SearchOutcome(results=[SearchHit(url="https://example.com", title="t", snippet="s")], cost_usd=0.0)
-    with patch("gateway.api.routes.search.run_search", new=AsyncMock(return_value=outcome)):
+    with patch("gateway.services.search_backend.run_search", new=AsyncMock(return_value=outcome)):
         response = client.post(
             f"{API_ROOT}/search/open-stub-search",
             json={"query": "anything"},
