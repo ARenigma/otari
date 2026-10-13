@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { TraceDetail } from "@/client"
 import { Chip } from "@/design-system/indicators/Chip"
 import { Segmented } from "@/design-system/navigation/Segmented"
@@ -29,16 +29,24 @@ const VIEWS = [
 ]
 
 // One session, as the body of the panel it opens in: its totals, then its turns
-// as a tree (or every span as a log) beside the facts of whichever span is open. Stateless apart from which view and span
-// are open, which belong to this panel and to nobody else.
+// as a tree (or every span as a log) beside the facts of whichever span is open.
+// Stateless apart from which view and span are open, which belong to this panel
+// and to nobody else.
 export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
   const [view, setView] = useState<View>("tree")
   const [selectedSpanId, setSelectedSpanId] = useState("")
+  const detailsRef = useRef<HTMLDivElement>(null)
   const { summary } = detail
   const tree = buildTraceTree(detail)
   const selected =
     detail.spans.find((span) => span.span_id === selectedSpanId) ??
     detail.spans[0]
+  const select = (spanId: string) => {
+    setSelectedSpanId(spanId)
+    // On a phone the facts sit below the list, so they are brought into view;
+    // beside it on a desk they already are, and "nearest" leaves them be.
+    detailsRef.current?.scrollIntoView?.({ block: "nearest" })
+  }
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-col gap-2 border-border border-b px-5 py-4">
@@ -81,7 +89,7 @@ export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
             <SpanTree
               tree={tree}
               selectedSpanId={selected?.span_id ?? ""}
-              onSelect={setSelectedSpanId}
+              onSelect={select}
             />
           ) : (
             <ol className="flex flex-col gap-1" aria-label="Spans in order">
@@ -89,7 +97,7 @@ export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
                 <li key={span.span_id}>
                   <button
                     type="button"
-                    onClick={() => setSelectedSpanId(span.span_id)}
+                    onClick={() => select(span.span_id)}
                     aria-current={
                       span.span_id === selected?.span_id ? "true" : undefined
                     }
@@ -114,7 +122,7 @@ export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
             </ol>
           )}
         </div>
-        <div className="min-w-0 overflow-y-auto p-5">
+        <div ref={detailsRef} className="min-w-0 overflow-y-auto p-5">
           {selected ? <SpanDetails span={selected} /> : null}
         </div>
       </div>
