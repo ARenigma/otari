@@ -8,11 +8,16 @@ import {
   formatTokens,
 } from "@/shared/helpers/format"
 
+// A count the span did not report is unknown, never zero.
+function tokenCount(count: number | null | undefined) {
+  return count != null ? formatTokens(count) : "unknown"
+}
+
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <dt className="text-caption">{label}</dt>
-      <dd className="truncate text-body tabular-nums">{children}</dd>
+      <dd className="break-words text-body tabular-nums">{children}</dd>
     </div>
   )
 }
@@ -39,10 +44,10 @@ export function SpanDetails({ span }: { span: TraceSpan }) {
         </Fact>
         {span.model ? <Fact label="Model">{span.model}</Fact> : null}
         {span.provider ? <Fact label="Provider">{span.provider}</Fact> : null}
-        {span.input_tokens != null ? (
+        {span.input_tokens != null || span.output_tokens != null ? (
           <Fact label="Tokens">
-            {formatTokens(span.input_tokens)} in ·{" "}
-            {formatTokens(span.output_tokens ?? 0)} out
+            {tokenCount(span.input_tokens)} in ·{" "}
+            {tokenCount(span.output_tokens)} out
           </Fact>
         ) : null}
         {span.cost != null ? (

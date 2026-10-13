@@ -96,7 +96,7 @@ export function TraceDetailPanel({ detail }: { detail: TraceDetail }) {
                     aria-current={
                       span.span_id === selected?.span_id ? "true" : undefined
                     }
-                    className={`flex min-h-11 w-full min-w-0 items-center gap-3 rounded-md px-2 text-left text-body ${
+                    className={`flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md px-2 text-left text-body ${
                       span.span_id === selected?.span_id
                         ? "bg-primary-subtle"
                         : "hover:bg-surface-alt"

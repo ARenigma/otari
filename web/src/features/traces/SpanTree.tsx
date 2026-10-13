@@ -73,7 +73,7 @@ function SpanRow({
         type="button"
         aria-current={isSelected ? "true" : undefined}
         onClick={() => onSelect(span.span_id)}
-        className={`flex min-h-11 w-full min-w-0 items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors motion-reduce:transition-none ${
+        className={`flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors motion-reduce:transition-none ${
           isSelected ? "bg-primary-subtle" : "hover:bg-surface-alt"
         }`}
       >
