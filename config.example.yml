@@ -58,6 +58,21 @@ providers:
 #         - default: openai:gpt-5-mini
 #       on_failure:
 #         - anthropic:claude-haiku-4-5
+#     # Overflow: gpt-5-mini takes up to 100 requests a minute, the rest go to
+#     # claude-haiku-4-5. `enabled: false` turns the overflow off and keeps every
+#     # request on the default, where the limit then refuses past 100 a minute
+#     # (remove the rate limit rule as well to lift the cap).
+#     summarize:
+#       select:
+#         - router: priority
+#           enabled: true
+#           candidates: [openai:gpt-5-mini, anthropic:claude-haiku-4-5]
+#         - default: openai:gpt-5-mini
+# rate_limits:
+#   - name: mini-cap
+#     per: model
+#     models: ["openai:gpt-5-mini"]
+#     rpm: 100
 
 # Budgets and API keys written to the database at every start. A key's secret is
 # yours to choose ('tk-' plus random characters); see docs/configuration.md.

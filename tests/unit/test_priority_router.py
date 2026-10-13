@@ -7,9 +7,11 @@ pinned here is the order the plan is compiled in and how it is shown.
 import asyncio
 
 import pytest
+import yaml
+from pydantic import ValidationError
 
 from gateway.core.config import GatewayConfig
-from gateway.models.routing import PolicySpec
+from gateway.models.routing import PolicySpec, RoutingConfig
 from gateway.services.routing.backends import (
     PRIORITY_BACKEND,
     backend_pool_is_teachable,
@@ -99,3 +101,88 @@ def test_priority_is_a_known_backend_that_needs_no_pricing_or_examples() -> None
     assert PRIORITY_BACKEND in known_backends()
     assert not backend_requires_pricing(PRIORITY_BACKEND)
     assert not backend_pool_is_teachable(PRIORITY_BACKEND)
+
+
+def _disabled_spec() -> PolicySpec:
+    return PolicySpec.model_validate(
+        {
+            "select": [
+                {
+                    "router": PRIORITY_BACKEND,
+                    "enabled": False,
+                    "candidates": ["openai:gpt-5", "anthropic:claude-sonnet-4-5"],
+                },
+                {"default": "openai:gpt-5"},
+            ],
+            "on_failure": ["mistral:mistral-small"],
+        }
+    )
+
+
+def test_enabled_parses_from_config_and_defaults_to_on() -> None:
+    routing = RoutingConfig.model_validate(
+        yaml.safe_load(
+            """
+            policies:
+              spill:
+                select:
+                  - router: priority
+                    candidates: [openai:gpt-5, anthropic:claude-sonnet-4-5]
+                  - default: openai:gpt-5
+              pinned:
+                select:
+                  - router: priority
+                    enabled: false
+                    candidates: [openai:gpt-5, anthropic:claude-sonnet-4-5]
+                  - default: openai:gpt-5
+            """
+        )
+    )
+
+    assert routing.policies["spill"].router_enabled
+    assert not routing.policies["pinned"].router_enabled
+    # Omitted stays omitted when a stored policy is dumped, so existing rows do not grow a key.
+    assert "enabled" not in routing.policies["spill"].model_dump(exclude_none=True)["select"][0]
+
+
+def test_a_policy_with_no_router_counts_as_enabled() -> None:
+    assert PolicySpec.model_validate({"select": [{"default": "openai:gpt-5"}]}).router_enabled
+
+
+def test_enabled_on_a_static_entry_is_refused() -> None:
+    with pytest.raises(ValidationError, match="only applies to a `router` entry"):
+        PolicySpec.model_validate(
+            {
+                "select": [
+                    {"when": {"user_id": "alice"}, "target": "anthropic:claude-sonnet-4-5", "enabled": False},
+                    {"default": "openai:gpt-5"},
+                ]
+            }
+        )
+
+
+def test_a_disabled_router_serves_the_default_then_on_failure(config: GatewayConfig) -> None:
+    spec = _disabled_spec()
+    ordering = asyncio.run(
+        decide_ordering(
+            config,
+            spec,
+            policy_name="spill",
+            user_id="alice",
+            allowlist=None,
+            signal=RoutingSignal(task_signal="hi", trace_signal="hi", trace_anchor="hi"),
+        )
+    )
+
+    assert ordering is not None
+    assert ordering.selectors == []
+    assert ordering.rationale == "router is disabled in the policy"
+    assert _canonical(config, spec, ordering) == ["openai:gpt-5", "mistral:mistral-small"]
+
+
+def test_explain_shows_the_default_plan_for_a_disabled_router(config: GatewayConfig) -> None:
+    spec = _disabled_spec()
+    ordering, shares = explain_router_ordering(config, spec)
+
+    assert (ordering, shares) == (None, [])
+    assert _canonical(config, spec, ordering) == ["openai:gpt-5", "mistral:mistral-small"]

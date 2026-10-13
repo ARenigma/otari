@@ -42,7 +42,20 @@ BACKUP = "openai:gpt-4o"
 USER = "spill-user"
 
 
-def _client(postgres_url: str, rules: list[dict[str, Any]]) -> Generator[TestClient]:
+_SPILL_POLICY: dict[str, Any] = {
+    "select": [{"router": "priority", "candidates": [FIRST, SECOND]}, {"default": SECOND}],
+    "on_failure": [BACKUP],
+}
+
+
+def _overflow_policy(*, enabled: bool) -> dict[str, Any]:
+    """The documented overflow shape: the primary is the default, so turning the router off keeps traffic there."""
+    return {"select": [{"router": "priority", "enabled": enabled, "candidates": [FIRST, SECOND]}, {"default": FIRST}]}
+
+
+def _client(
+    postgres_url: str, rules: list[dict[str, Any]], policy: dict[str, Any] = _SPILL_POLICY
+) -> Generator[TestClient]:
     config = GatewayConfig(
         database_url=postgres_url,
         master_key="test-master-key",
@@ -53,16 +66,7 @@ def _client(postgres_url: str, rules: list[dict[str, Any]]) -> Generator[TestCli
         model_discovery=False,
         providers={"openai": {"api_key": "sk-openai"}, "anthropic": {"api_key": "sk-ant"}},
         rate_limits=[RateLimitRule(**rule) for rule in rules],
-        routing=RoutingConfig.model_validate(
-            {
-                "policies": {
-                    "spill": {
-                        "select": [{"router": "priority", "candidates": [FIRST, SECOND]}, {"default": SECOND}],
-                        "on_failure": [BACKUP],
-                    }
-                }
-            }
-        ),
+        routing=RoutingConfig.model_validate({"policies": {"spill": policy}}),
     )
     client_gen = build_test_client(config)
     client = next(client_gen)
@@ -81,6 +85,24 @@ def first_capped(postgres_url: str) -> Generator[TestClient]:
 @pytest.fixture
 def all_capped(postgres_url: str) -> Generator[TestClient]:
     yield from _client(postgres_url, [{"name": "cap", "per": "model", "models": [FIRST, SECOND, BACKUP], "rpm": 1}])
+
+
+@pytest.fixture
+def overflow_on(postgres_url: str) -> Generator[TestClient]:
+    yield from _client(
+        postgres_url,
+        [{"name": "first-cap", "per": "model", "models": [FIRST], "rpm": 2}],
+        _overflow_policy(enabled=True),
+    )
+
+
+@pytest.fixture
+def overflow_off(postgres_url: str) -> Generator[TestClient]:
+    yield from _client(
+        postgres_url,
+        [{"name": "first-cap", "per": "model", "models": [FIRST], "rpm": 2}],
+        _overflow_policy(enabled=False),
+    )
 
 
 def _completion(model: str) -> ChatCompletion:
@@ -242,3 +264,19 @@ def test_a_streamed_request_spills_the_same_way(first_capped: TestClient) -> Non
                 assert response.status_code == 200
 
     assert sent == [FIRST, FIRST, SECOND]
+
+
+def test_the_overflow_shape_spills_while_its_router_is_enabled(overflow_on: TestClient) -> None:
+    results = [_chat(overflow_on, "spill") for _ in range(3)]
+
+    assert [response.status_code for response, _ in results] == [200, 200, 200]
+    assert [sent for _, sent in results] == [[FIRST], [FIRST], [SECOND]]
+
+
+def test_a_disabled_router_does_not_overflow(overflow_off: TestClient) -> None:
+    """``enabled: false`` serves the default target, as ``Otari-Router: off`` does, so the limit refuses."""
+    results = [_chat(overflow_off, "spill") for _ in range(3)]
+
+    assert [response.status_code for response, _ in results] == [200, 200, 429]
+    assert [sent for _, sent in results] == [[FIRST], [FIRST], []]
+    assert results[2][0].json()["detail"] == "Rate limit 'first-cap' exceeded: 2 requests per minute"

@@ -41,6 +41,7 @@ import {
   findFallthroughIndex,
   findFallthroughTarget,
   findRouterBackend,
+  findRouterDisabled,
   findWeights,
   KNN_BACKEND,
   MAX_CANDIDATES,
@@ -409,6 +410,8 @@ export function PolicyForm({
     !overCandidateCap &&
     chain.every((entry) => entry.trim() !== "")
 
+  const routerDisabled = existing ? findRouterDisabled(existing.spec) : false
+
   // Built in plan order, with the fallthrough last, which is what the schema
   // requires: an entry after the default could never be reached.
   const spec: PolicySpec = useMemo(
@@ -426,6 +429,7 @@ export function PolicyForm({
               {
                 router: backend,
                 candidates: candidates.map((entry) => entry.trim()),
+                ...(routerDisabled ? { enabled: false } : {}),
                 // Keyed by selector, which is how the server reads it. Only for the
                 // weighted backend: a weight map on a knn entry is refused, because
                 // it would read as a split and do nothing.
@@ -457,6 +461,7 @@ export function PolicyForm({
       candidates,
       isRouted,
       backend,
+      routerDisabled,
       isWeighted,
       weightValues,
       effectiveTarget,

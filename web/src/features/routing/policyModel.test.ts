@@ -10,6 +10,7 @@ import {
   findFallthroughIndex,
   findFallthroughTarget,
   findRouterBackend,
+  findRouterDisabled,
   findWeights,
   normalizeBackend,
 } from "./policyModel"
@@ -101,6 +102,21 @@ describe("routerBackendOf", () => {
         select: [{ default: "a" }],
       } as unknown as PolicySpec),
     ).toBeUndefined()
+  })
+})
+
+describe("findRouterDisabled", () => {
+  it("is true only for a router entry written with enabled: false", () => {
+    const priority = (enabled?: boolean): PolicySpec => ({
+      select: [
+        { router: "priority", candidates: ["a", "b"], enabled },
+        { default: "a" },
+      ],
+    })
+    expect(findRouterDisabled(priority(false))).toBe(true)
+    expect(findRouterDisabled(priority(true))).toBe(false)
+    expect(findRouterDisabled(priority())).toBe(false)
+    expect(findRouterDisabled({ select: [{ default: "a" }] })).toBe(false)
   })
 })
 

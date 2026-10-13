@@ -59,6 +59,9 @@ export interface PolicySelectEntry {
    *  Relative, not percentages: {a: 70, b: 30} and {a: 7, b: 3} are one split. A
    *  candidate left out takes no traffic and stays in the plan as a failover. */
   weights?: Record<string, number>
+  /** For a `router` entry only. False turns the router off: the policy serves its
+   *  default target, as with `Otari-Router: off`. Omitted means on. */
+  enabled?: boolean
 }
 
 export interface PolicyGuardrail {

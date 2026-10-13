@@ -72,6 +72,15 @@ export function findRouterBackend(spec: PolicySpec): string | undefined {
   )
 }
 
+/** Whether the policy's router entry is turned off (`enabled: false`). The form
+ *  has no control for it, so an edit carries it through rather than turning the
+ *  router back on. */
+export function findRouterDisabled(spec: PolicySpec): boolean {
+  return (
+    spec.select.find((entry) => entry.router !== undefined)?.enabled === false
+  )
+}
+
 /** The declared traffic split, empty unless the policy is weighted. */
 export function findWeights(spec: PolicySpec): Record<string, number> {
   return spec.select.find((entry) => entry.router !== undefined)?.weights ?? {}

@@ -321,7 +321,7 @@ def routing_explain(
         click.echo("Configured policies:")
         for name, listed in cfg.routing.policies.items():
             shape = (
-                f"router:{listed.router_backend}"
+                f"router:{listed.router_backend}{'' if listed.router_enabled else ' (disabled)'}"
                 if listed.router_backend
                 else ("dynamic" if listed.is_dynamic else "static")
             )
@@ -369,7 +369,12 @@ def routing_explain(
     # Keyed on the backend rather than on the shares: a weighted policy whose whole
     # split is filtered out for this caller has no shares to print, and the decline
     # text below is the learned router's vocabulary, which would misdescribe it.
-    if backend_is_weighted(spec.router_backend):
+    if spec.router_backend is not None and not spec.router_enabled:
+        click.echo(
+            f"  router: '{spec.router_backend}' is disabled in this policy (`enabled: false`), so every "
+            "request is served by the plan above, as with Otari-Router: off."
+        )
+    elif backend_is_weighted(spec.router_backend):
         click.echo(
             "  weighted: one candidate is drawn per request in proportion to its share, and a candidate "
             "that fails before responding falls to the next draw before on_failure. Shares are normalized "

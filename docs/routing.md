@@ -148,6 +148,57 @@ In the dashboard, create one from Routing with "Move to the next model when one
 hits its rate limit", order the models with the arrows, and add the limit under
 Settings, Rate limit rules, counted for "Each model".
 
+### Turn overflow on and off
+
+Overflow is two pieces of config:
+
+1. A [rate limit rule](configuration.md#rate-limit-rules) with `per: model`
+   and `rpm` (or `tpm`, `max_concurrent`) says when a model is full.
+2. The policy's `priority` router moves a request to the next candidate when
+   one is full. It reads the rule's count, so it needs the rule.
+
+A `router` entry takes `enabled`, which defaults to `true`. `enabled: false`
+turns off the second piece only. The router is skipped, as it is for a request
+sent with `Otari-Router: off`: the policy serves its `default` target, then
+`on_failure`. The rate limit rule stays in force.
+
+| Overflow off, and | Set | Past the limit |
+| --- | --- | --- |
+| the cap stays | `enabled: false` | A request is refused with a 429, or goes to `on_failure` if the policy has one. |
+| no cap | `enabled: false`, and remove or comment out the rate limit rule (or raise its `rpm`) | Every request goes to the primary model. |
+
+A disabled router serves the policy's `default`, so write the primary model
+as the `default`:
+
+```yaml
+rate_limits:
+  - name: flash-cap
+    per: model
+    models: ["vertex:gemini-2.5-flash"]
+    rpm: 100
+
+routing:
+  policies:
+    summarize:
+      select:
+        - router: priority
+          enabled: true                 # false: no overflow
+          candidates:
+            - vertex:gemini-2.5-flash   # takes every request up to 100 a minute
+            - together:llama-3.3-70b    # takes the rest while enabled
+        - default: vertex:gemini-2.5-flash
+```
+
+A policy with the overflow model as its `default`, like the one at the start of
+this section, does the opposite when disabled: every request goes to the
+overflow model.
+
+`enabled` works the same on a `weighted` or `knn` router entry, and in a policy
+stored through `/api/v1/routing/policies`, whose `spec` takes the same schema.
+The dashboard's policy form has no switch for it yet, but keeps a stored
+`enabled: false` when the policy is edited there. `otari routing explain` marks
+a disabled router and shows the plan it serves instead.
+
 
 The `knn` router uses scored examples to rank candidates for each user's
 traffic:

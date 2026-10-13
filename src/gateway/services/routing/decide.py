@@ -99,8 +99,9 @@ async def decide_ordering(
     the unknown-backend case is logged, once per policy.
 
     Returns an *empty* :class:`RouterOrdering` when a router was asked and
-    declined, or when the caller opted out. That also serves the default target,
-    but deliberately without the warning: a decline is normal operation.
+    declined, when the caller opted out, or when the policy turns its router off.
+    That also serves the default target, but deliberately without the warning: a
+    decline is normal operation.
     """
     backend_name = spec.router_backend
     if backend_name is None:
@@ -110,6 +111,8 @@ async def decide_ordering(
         return None
     if signal.opted_out:
         return RouterOrdering([], rationale="caller sent Otari-Router: off")
+    if not spec.router_enabled:
+        return RouterOrdering([], rationale="router is disabled in the policy")
 
     backend = get_router_backend(config, backend_name)
     if backend is None:
@@ -243,7 +246,12 @@ def explain_router_ordering(
     candidate is named in ``dropped``. Returning nothing here instead would compile
     the policy down to its ``on_failure`` chain with the whole split silently
     missing from both lists.
+
+    A policy whose router is turned off returns ``(None, [])``: the request path
+    serves its default target, so that is the plan to show.
     """
+    if not spec.router_enabled:
+        return None, []
     if backend_is_priority(spec.router_backend):
         declared = spec.router_candidates
         rationale = f"priority order ({', '.join(declared)})"

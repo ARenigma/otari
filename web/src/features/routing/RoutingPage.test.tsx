@@ -1692,6 +1692,47 @@ describe("RoutingPage", () => {
     ).toBeDisabled()
   })
 
+  it("keeps a disabled router disabled when the policy is edited", async () => {
+    // The form has no switch for `enabled`, so rebuilding the entry must not
+    // drop it: that would turn overflow back on behind the operator's back.
+    const { calls } = mockApi([
+      policy(
+        "spill",
+        {
+          select: [
+            {
+              router: "priority",
+              enabled: false,
+              candidates: ["openai:gpt-5-mini", "openai:gpt-5"],
+            },
+            { default: "openai:gpt-5-mini" },
+          ],
+        },
+        { is_dynamic: true },
+      ),
+    ])
+    const user = userEvent.setup()
+    renderPage(<RoutingPage />)
+
+    const row = (await screen.findByText("spill")).closest("tr")!
+    await user.click(within(row).getByRole("button", { name: "Edit" }))
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }),
+    )
+
+    const post = calls.find(
+      (call) =>
+        call.method === "POST" &&
+        call.url.includes(`${API_ROOT}/routing/policies`),
+    )
+    const spec = (post!.body as { spec: PolicySpec }).spec
+    expect(spec.select[0]).toEqual({
+      router: "priority",
+      candidates: ["openai:gpt-5-mini", "openai:gpt-5"],
+      enabled: false,
+    })
+  })
+
   it("edits a weighted policy without losing its split", async () => {
     const { calls } = mockApi([
       policy("balanced", WEIGHTED, { is_dynamic: true }),

@@ -206,6 +206,15 @@ class SelectEntry(BaseModel):
             "no traffic; that is how a provider is drained without being deleted."
         ),
     )
+    enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Whether a `router` entry runs; omitted means on. False turns the router off without deleting "
+            "it: the policy serves as it does for a request sent with `Otari-Router: off`, skipping the "
+            "router's ordering and continuing to the next entry (in the end, the `default` target), with "
+            "`on_failure` unchanged. The candidates are still validated, so turning it back on cannot fail."
+        ),
+    )
 
     @model_validator(mode="after")
     def _exactly_one_destination(self) -> SelectEntry:
@@ -225,6 +234,20 @@ class SelectEntry(BaseModel):
             raise ValueError(
                 "a `router` entry cannot carry a `when` clause: the router supplies the whole ordering, "
                 "so combining it with a condition has no defined meaning"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _enabled_belongs_to_routers(self) -> SelectEntry:
+        """``enabled`` switches a router off, so a static entry has nothing for it to switch.
+
+        Refused rather than ignored: ``enabled: false`` on a ``when`` entry reads as
+        "skip this rule" and would do nothing.
+        """
+        if self.router is None and self.enabled is not None:
+            raise ValueError(
+                "`enabled` only applies to a `router` entry: it turns the router off. To stop using a "
+                "static entry, remove it."
             )
         return self
 
@@ -416,6 +439,14 @@ class PolicySpec(BaseModel):
             if entry.router is not None:
                 return entry.router
         return None
+
+    @property
+    def router_enabled(self) -> bool:
+        """Whether the router entry runs. True for a policy with no router, which has none to turn off."""
+        for entry in self.select:
+            if entry.router is not None:
+                return entry.enabled is not False
+        return True
 
     @property
     def router_weights(self) -> dict[str, float]:
