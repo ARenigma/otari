@@ -475,6 +475,39 @@ class ScopedBudgetRepository(BaseRepository[ScopedBudget, Never, Never]):
             values["reserved_requests"] = _release_count_expression(ScopedBudget.reserved_requests, held_requests)
         await self._update_counters(scoped_budget_ids, values)
 
+    async def scope_ceiling(self, scope_type: ScopeType, scope_id: str) -> ScopedBudget | None:
+        """Return the ceiling that caps this scope across every provider, or None."""
+        result = await self.db.execute(select(ScopedBudget).where(_scope_match(scope_type, scope_id, None)))
+        return result.scalars().first()
+
+    async def add_scope_ceiling_if_absent(
+        self,
+        *,
+        scope_type: ScopeType,
+        scope_id: str,
+        budget_id: str,
+        period_start: datetime | None,
+        period_end: datetime | None,
+    ) -> bool:
+        """Stage a ceiling capping this scope across every provider, returning False when one already does.
+
+        The insert runs in a SAVEPOINT, so losing that race to a concurrent writer rolls back this row alone.
+        """
+        try:
+            async with self.db.begin_nested():
+                self.db.add(
+                    ScopedBudget(
+                        scope_type=scope_type,
+                        scope_id=scope_id,
+                        budget_id=budget_id,
+                        period_start=period_start,
+                        period_end=period_end,
+                    )
+                )
+        except IntegrityError:
+            return False
+        return True
+
     async def _exists(self, match: ColumnElement[bool]) -> bool:
         """Report whether any ceiling matches this predicate."""
         result = await self.db.execute(select(func.count()).select_from(ScopedBudget).where(match))

@@ -1188,6 +1188,11 @@ def get_budget_service(
 BudgetServiceDep = Annotated[BudgetService, Depends(get_budget_service)]
 
 
+def build_budget_service(session: AsyncSession) -> BudgetService:
+    """Build the budget service for startup work, on a Unit of Work over a session of its own."""
+    return get_budget_service(get_unit_of_work(session), session)
+
+
 def get_organization_guardrail_definition_service(
     uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
     db: Annotated[AsyncSession, Depends(get_db)],
