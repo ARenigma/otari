@@ -189,9 +189,9 @@ routing:
         - default: vertex:gemini-2.5-flash
 ```
 
-A policy with the overflow model as its `default`, like the one at the start of
-this section, does the opposite when disabled: every request goes to the
-overflow model.
+A policy with the overflow model as its `default`, like the first example under
+[Spill over when a model is full](#spill-over-when-a-model-is-full-priority-routing),
+does the opposite when disabled: every request goes to the overflow model.
 
 `enabled` works the same on a `weighted` or `knn` router entry, and in a policy
 stored through `/api/v1/routing/policies`, whose `spec` takes the same schema.
