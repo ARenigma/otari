@@ -9,11 +9,11 @@ hybrid modes.
 Claude Code appends `/v1/messages` itself, so `ANTHROPIC_BASE_URL` ends in
 `/api`, not `/api/v1`.
 
-### Connected to otari.ai
+### On otari.ai
 
 ```bash
 export ANTHROPIC_BASE_URL="https://api.otari.ai/api"
-export ANTHROPIC_AUTH_TOKEN="tk_your_otari_token"
+export ANTHROPIC_AUTH_TOKEN="<your-otari-key>"   # an API key from otari.ai
 export ANTHROPIC_MODEL="anthropic:claude-sonnet-4-6"
 claude
 ```
