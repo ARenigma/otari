@@ -246,9 +246,47 @@ def test_a_link_verifies_only_with_the_password_chosen_at_signup(
 
         wrong = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token, "password": "not-the-password"})
         assert wrong.status_code == 400
-        # A mismatch consumes nothing, so a typo does not cost the link.
+        # A mismatch consumes nothing, so a typo does not cost the link, and the refusal says the link still works.
+        assert "This link still works" in wrong.json()["detail"]
         right = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token, "password": PASSWORD})
         assert right.status_code == 200, right.text
+
+
+def test_a_dead_link_is_refused_without_mentioning_the_password(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with _client(tmp_path) as client:
+        token = _signed_up(client, caplog, email="ada@example.com")
+        assert (
+            client.post(f"{API_ROOT}/auth/verify-email", json={"token": token, "password": PASSWORD}).status_code == 200
+        )
+
+        spent = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token, "password": "not-the-password"})
+        unknown = client.post(f"{API_ROOT}/auth/verify-email", json={"token": "not-a-real-token", "password": PASSWORD})
+
+        assert spent.status_code == unknown.status_code == 400
+        assert (
+            spent.json() == unknown.json() == {"detail": "This verification link is invalid, expired, or already used"}
+        )
+
+
+def test_a_link_minted_before_deactivation_stays_dead_after_reactivation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Deactivating an account clears its pending links, so reactivating it does not bring one back."""
+    with _client(tmp_path) as client:
+        token = _signed_up(client, caplog, email="ada@example.com")
+        accounts = client.get(f"{API_ROOT}/admin/users", headers={"Otari-Key": MASTER_KEY}).json()["data"]
+        account_id = next(row["id"] for row in accounts if row["email"] == "ada@example.com")
+        for is_active in (False, True):
+            changed = client.patch(
+                f"{API_ROOT}/admin/users/{account_id}", json={"is_active": is_active}, headers={"Otari-Key": MASTER_KEY}
+            )
+            assert changed.status_code == 200, changed.text
+
+        response = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token, "password": PASSWORD})
+
+        assert response.status_code == 400
 
 
 def test_a_stranger_who_signs_up_an_invited_address_cannot_have_its_owner_verify_them(

@@ -365,4 +365,46 @@ describe("OAuthCallbackPage", () => {
     // sign-in nor a refusal.
     expect(recordEvent).toHaveBeenCalledTimes(1)
   })
+
+  it("tells the person when the sign-in removed their earlier password", async () => {
+    // Rendered without the harness's gate, the way `DeploymentRoot` mounts it:
+    // the page keeps rendering after `login()`, which is what lets it say this.
+    window.sessionStorage.setItem(STATE_KEY, "the-state")
+    window.location.hash = "#/auth/google/callback"
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        expires_at: "2026-09-01T00:00:00Z",
+        password_removed: true,
+      }),
+    )
+
+    render(
+      <AppProviders>
+        <DeploymentProvider value={bootstrap({ oauth_providers: ["google"] })}>
+          <OAuthCallbackPage
+            provider="google"
+            hash="#/auth/google/callback?code=the-code&state=the-state"
+          />
+        </DeploymentProvider>
+      </AppProviders>,
+    )
+
+    expect(
+      await screen.findByRole("heading", { name: "You're signed in" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /the password set on this account before then was removed/,
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: "Set a new password" }),
+    ).toHaveAttribute("href", "#/account")
+    expect(screen.getByRole("link", { name: "Continue" })).toHaveAttribute(
+      "href",
+      "#/",
+    )
+    // The notice waits for the person instead of moving them on.
+    expect(window.location.hash).toBe("#/auth/google/callback")
+  })
 })

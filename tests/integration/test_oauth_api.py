@@ -34,7 +34,7 @@ from sqlmodel import col, delete
 
 from gateway.api.routes import auth_oauth
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.exceptions.identity_exceptions import OAuthIdentityLinkConflictError
+from gateway.exceptions.identity_exceptions import OAuthIdentityLinkConflictError, OAuthProviderUnavailableError
 from gateway.log_config import logger as gateway_logger
 from gateway.models.identity import EmailAssertion, OAuthIdentityLink, ProviderIdentity
 from gateway.models.tenancy import Organization, User, WebAuthnCredential
@@ -806,7 +806,25 @@ def test_a_provider_that_returns_no_address_at_all_is_refused(
 ) -> None:
     stub_exchange(monkeypatch, email=None)
 
-    assert client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"}).status_code == 401
+    response = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+
+    assert response.status_code == 401
+    # Nothing to verify, so the advice is to add an address, not to verify one.
+    assert "Google did not share an email address" in response.json()["detail"]
+
+
+def test_a_provider_outage_answers_502_with_the_same_message(
+    client: TestClient, oauth_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _unavailable(*_args: Any, **_kwargs: Any) -> ProviderIdentity:
+        raise OAuthProviderUnavailableError("Google")
+
+    monkeypatch.setattr("gateway.api.routes.auth_oauth.exchange_code", _unavailable)
+
+    response = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Google did not complete the sign-in. Try again."}
 
 
 def test_a_deactivated_identity_cannot_sign_in_with_a_provider_either(
@@ -1379,6 +1397,8 @@ def test_a_provider_sign_in_ends_the_access_a_vouched_password_opened(
 
     signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
     assert signed_in.status_code == 200, signed_in.text
+    # The person is told, so the password they chose does not just stop working.
+    assert signed_in.json()["password_removed"] is True
     client.cookies.clear()
 
     client.cookies.set(SESSION_COOKIE_NAME, vouched_cookie)
@@ -1411,7 +1431,9 @@ def test_a_provider_sign_in_keeps_the_access_a_proven_password_opened(
     _give_a_passkey_and_a_reset_link(db_session, identity)
     stub_exchange(monkeypatch)
 
-    assert client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"}).status_code == 200
+    signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+    assert signed_in.status_code == 200, signed_in.text
+    assert signed_in.json()["password_removed"] is False
     client.cookies.clear()
 
     client.cookies.set(SESSION_COOKIE_NAME, proven_cookie)
@@ -1784,7 +1806,8 @@ def test_a_refused_exchange_leaves_the_state_spendable_for_the_retry(
     monkeypatch.setattr(OAuthClient, "_token_request", _boom)
     failed = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": state})
 
-    assert failed.status_code == 400
+    # An unreachable provider is an upstream failure, not the caller's.
+    assert failed.status_code == 502
     stub_token_endpoint(monkeypatch)
     retried = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c2", "state": state})
 

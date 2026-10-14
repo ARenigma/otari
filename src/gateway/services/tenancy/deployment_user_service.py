@@ -134,7 +134,8 @@ class DeploymentUserService:
         transaction, rather than leaving them to be refused when a cookie next
         comes back: ``resolve_dashboard_session`` does refuse them, but it only
         runs when the browser asks, so until then the rows are alive and
-        reactivating would hand back every cookie the account held.
+        reactivating would hand back every cookie the account held. Its pending
+        verification and reset links go for the same reason.
         """
         await self._require_administration_access(actor)
         if request.is_active is None and request.is_superuser is None:
@@ -160,6 +161,11 @@ class DeploymentUserService:
 
         if request.is_active is not None:
             target.is_active = request.is_active
+        if request.is_active is False:
+            target.email_verification_token_hash = None
+            target.email_verification_token_expires_at = None
+            target.password_reset_token_hash = None
+            target.password_reset_token_expires_at = None
         if request.is_superuser is not None:
             target.is_superuser = request.is_superuser
         self.db.add(target)

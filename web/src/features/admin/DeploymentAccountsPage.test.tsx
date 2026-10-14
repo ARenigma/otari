@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event"
 import type { ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { DeploymentUser } from "@/client"
+import type { DeploymentUser, PasswordLink } from "@/client"
 import { DeploymentAccountsPage } from "@/features/admin/DeploymentAccountsPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
@@ -23,7 +23,11 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-function mockApi(opts: { granted?: boolean; accounts?: DeploymentUser[] }) {
+function mockApi(opts: {
+  granted?: boolean
+  accounts?: DeploymentUser[]
+  passwordLink?: PasswordLink
+}) {
   const granted = opts.granted ?? true
   const accounts = opts.accounts ?? [deploymentUser()]
   const requests: Request[] = []
@@ -39,6 +43,9 @@ function mockApi(opts: { granted?: boolean; accounts?: DeploymentUser[] }) {
 
     if (url.includes(`${API_ROOT}/admin/access`)) {
       return jsonResponse({ granted })
+    }
+    if (url.endsWith("/password-link")) {
+      return jsonResponse(opts.passwordLink, 201)
     }
     if (url.includes(`${API_ROOT}/admin/users`)) {
       if (method === "GET") {
@@ -172,6 +179,75 @@ describe("DeploymentAccountsPage", () => {
     const patch = requests.find((request) => request.method === "PATCH")
     expect(patch?.url).toContain(`${API_ROOT}/admin/users/${ANALYST.id}`)
     expect(patch?.body).toEqual({ is_active: false })
+  })
+
+  it("hands over a password link to share where mail did not go out", async () => {
+    const requests = mockApi({
+      accounts: [ANALYST],
+      passwordLink: {
+        mail_sent: false,
+        link: "/#/reset-password?token=shared.abc",
+        expires_at: "2026-10-14T12:00:00Z",
+      },
+    })
+    renderPage(<DeploymentAccountsPage />)
+
+    await userEvent.click(
+      await screen.findByLabelText("Send Analyst a password link"),
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create the link" }),
+    )
+
+    const post = requests.find((request) => request.method === "POST")
+    expect(post?.url).toContain(
+      `${API_ROOT}/admin/users/${ANALYST.id}/password-link`,
+    )
+    expect(
+      await screen.findByText(/Otari did not send the email/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        `${window.location.origin}${window.location.pathname}#/reset-password?token=shared.abc`,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("says the link was emailed, and shows none, where mail went out", async () => {
+    mockApi({
+      accounts: [ANALYST],
+      passwordLink: {
+        mail_sent: true,
+        link: null,
+        expires_at: "2026-10-14T12:00:00Z",
+      },
+    })
+    renderPage(<DeploymentAccountsPage />)
+
+    await userEvent.click(
+      await screen.findByLabelText("Send Analyst a password link"),
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create the link" }),
+    )
+
+    expect(
+      await screen.findByText(/link to set a new password was sent to/),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/reset-password/)).not.toBeInTheDocument()
+  })
+
+  it("offers no password link for a deactivated account, and says why", async () => {
+    mockApi({
+      accounts: [deploymentUser({ full_name: "Analyst", is_active: false })],
+    })
+    renderPage(<DeploymentAccountsPage />)
+
+    expect(
+      await screen.findByLabelText(
+        "Send Analyst a password link (Reactivate this account first)",
+      ),
+    ).toBeDisabled()
   })
 
   it("reactivates a deactivated account with no confirmation", async () => {

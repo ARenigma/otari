@@ -529,6 +529,8 @@ export type DeploymentUser = Schemas["DeploymentUserPublic"]
 export type DeploymentUserOrganization =
   Schemas["DeploymentUserOrganizationPublic"]
 export type UpdateDeploymentUserRequest = Schemas["DeploymentUserUpdateRequest"]
+/** A link that sets an account's password: mailed, or returned to pass on. */
+export type PasswordLink = Schemas["PasswordLinkPublic"]
 
 export type Workspace = Schemas["WorkspacePublic"]
 export type CreateWorkspaceRequest = Schemas["WorkspaceCreate"]
@@ -713,6 +715,7 @@ export type PlaygroundFavoriteModelsUpdate =
 // and the callback body cannot drift from the spec without a type error.
 export type OAuthAuthorizeResponse = Schemas["AuthorizeResponse"]
 export type OAuthCallbackRequest = Schemas["OAuthCallbackRequest"]
+export type OAuthSessionResponse = Schemas["OAuthSessionResponse"]
 
 export type * from "./local"
 

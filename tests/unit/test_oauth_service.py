@@ -20,13 +20,19 @@ from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from apron_auth.errors import IdentityFetchError, TokenExchangeError
 from apron_auth.providers import github as apron_github
 from apron_auth.providers import google as apron_google
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import OAUTH_PROVIDERS, GatewayConfig
-from gateway.exceptions.identity_exceptions import OAuthExchangeError, OAuthNotConfiguredError, OAuthStateError
+from gateway.exceptions.identity_exceptions import (
+    OAuthExchangeError,
+    OAuthNotConfiguredError,
+    OAuthProviderUnavailableError,
+    OAuthStateError,
+)
 from gateway.log_config import logger as gateway_logger
 from gateway.models.identity import EmailAssertion
 from gateway.services import oauth_service
@@ -663,6 +669,60 @@ class TestExchange:
                 flow_secret=FLOW_SECRET,
                 db=fake_db(),
             )
+
+
+class _FailingClient:
+    def __init__(self, error: Exception, *, on: str) -> None:
+        self._error = error
+        self._on = on
+
+    async def exchange_code(self, *, code: str, state: str) -> object:
+        if self._on == "exchange":
+            raise self._error
+        return object()
+
+    async def fetch_identity(self, _tokens: object) -> object:
+        raise self._error
+
+
+class TestProviderFailures:
+    """A spent or refused code is the caller's problem; a provider that fails is not."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "on"),
+        [
+            (TokenExchangeError("token endpoint answered 500"), "exchange"),
+            (TokenExchangeError("try later", error_code="temporarily_unavailable"), "exchange"),
+            (IdentityFetchError("userinfo answered 500"), "fetch"),
+            (TimeoutError(), "exchange"),
+        ],
+    )
+    async def test_an_upstream_failure_is_a_bad_gateway(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, on: str
+    ) -> None:
+        monkeypatch.setattr(oauth_service, "_client", lambda *_args: _FailingClient(error, on=on))
+
+        with pytest.raises(OAuthProviderUnavailableError) as raised:
+            await oauth_service.exchange_code(
+                configured(), "google", code="c", state="s", flow_secret=FLOW_SECRET, db=fake_db()
+            )
+
+        assert raised.value.status_code == 502
+        assert raised.value.message == "Google did not complete the sign-in. Try again."
+
+    @pytest.mark.asyncio
+    async def test_a_refused_code_stays_a_client_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        refused = TokenExchangeError("bad code", error_code="invalid_grant")
+        monkeypatch.setattr(oauth_service, "_client", lambda *_args: _FailingClient(refused, on="exchange"))
+
+        with pytest.raises(OAuthExchangeError) as raised:
+            await oauth_service.exchange_code(
+                configured(), "google", code="c", state="s", flow_secret=FLOW_SECRET, db=fake_db()
+            )
+
+        assert not isinstance(raised.value, OAuthProviderUnavailableError)
+        assert raised.value.status_code == 400
 
 
 class TestProviderLabel:

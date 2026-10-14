@@ -90,7 +90,7 @@ describe("VerifyEmailPage", () => {
     vi.mocked(apiFetch).mockRejectedValue(
       new ApiError(
         400,
-        "This verification link is invalid, expired, or already used, or the password is not the one chosen when signing up",
+        'That is not the password chosen when signing up. This link still works, so try again, or choose a new password with "Forgot your password?".',
       ),
     )
     renderPage("#/verify-email?token=abc123")
@@ -98,7 +98,7 @@ describe("VerifyEmailPage", () => {
     await verifyWith("a-typo")
 
     expect(
-      await screen.findByText(/the password is not the one chosen/),
+      await screen.findByText(/This link still works, so try again/),
     ).toBeInTheDocument()
     expect(screen.getByLabelText("Password")).toBeInTheDocument()
     expect(

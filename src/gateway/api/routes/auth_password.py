@@ -4,7 +4,8 @@ One endpoint, ``PUT /api/v1/auth/password``, and it always acts on the caller's 
 identity. There is deliberately no way here for an admin to set somebody else's
 password: an address on the roster with no password is an identity waiting for
 the signup and reset flows in #650, not one an operator should be able to take
-over.
+over. An operator helps somebody else back in with a password link
+(``POST /api/v1/admin/users/{user_id}/password-link``), which that person redeems.
 
 **Claiming a deployment.** First boot leaves a standalone deployment with an
 operator identity that has no address and no password
@@ -129,7 +130,9 @@ class SetPasswordRequest(BaseModel):
             "The address to sign in with. Required when the identity has none, which is the state "
             "first boot leaves the operator in, including when the master key is what authenticates "
             "the call. Resubmitting the address the identity already holds is accepted and ignored; "
-            "only a *different* address is refused, because changing one is not supported yet."
+            "only a *different* address is refused, because changing one is not supported yet. It is always the "
+            "caller's own address, the operator's when the master key authenticates the call, and never names "
+            "another account."
         ),
     )
 
@@ -166,6 +169,13 @@ async def set_dashboard_password(
     recovered; it does not excuse ``email``, because an identity with no address
     has nothing to sign in with whoever is asking. The operator setting a password
     for the first time retires master-key sign-in on this deployment.
+
+    With the master key the caller is the deployment's operator, so an ``email``
+    sent then is the operator's own sign-in address: on an unclaimed deployment it
+    claims the deployment with that address. This never sets another account's
+    password; an address another account holds is refused with 409. To help a
+    member who forgot their password, send them a link with
+    ``POST /api/v1/admin/users/{user_id}/password-link``.
 
     Every other session this identity holds ends, the caller's own excepted, so
     a cookie stolen before the change does not outlive it.

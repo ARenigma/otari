@@ -43,9 +43,9 @@ export function VerifyEmailPage({ hash }: { hash: string }) {
         onSuccess: () => {
           recordEvent(TELEMETRY_EVENTS.EMAIL_VERIFICATION_SUCCESS)
         },
-        // The gateway's wording is not recorded, only its status: a spent
-        // link and a wrong password answer the same way, and neither sentence
-        // is this event's business.
+        // The gateway's wording is not recorded, only its status: it tells a
+        // spent link from a wrong password for the person, and neither
+        // sentence is this event's business.
         onError: (error) => {
           recordEvent(TELEMETRY_EVENTS.EMAIL_VERIFICATION_FAILED, {
             error_code: "verification_rejected",

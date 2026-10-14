@@ -6,9 +6,11 @@ from typing import Protocol
 
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.identity_exceptions import (
+    DeploymentUserNotFoundError,
     OAuthAccountLinkedElsewhereError,
     OAuthEmailNotVerifiedError,
     OAuthIdentityUnknownError,
+    PasswordLinkUnavailableError,
     TermsNotAcceptedError,
 )
 from gateway.log_config import logger
@@ -17,8 +19,11 @@ from gateway.models.tenancy import User
 from gateway.ports.identity_provider_port import IdentityProviderPort, IdentityResolution
 from gateway.repositories.identity import IdentityRepositories
 from gateway.services.dashboard_session_service import hash_session_token
+from gateway.services.mail import Mailer
 from gateway.services.oauth_service import provider_label
-from gateway.services.tenancy import OrganizationService
+from gateway.services.tenancy import OrganizationService, unverified_identity_is_claimable
+from gateway.services.tenancy.password_reset_email import render_password_reset_email
+from gateway.services.tenancy.tokens import generate_shared_token, generate_token, hash_token
 
 _SESSION_TOKEN_PREFIX = "otari-sess-"
 
@@ -41,7 +46,7 @@ class SignIn:
 
     ``active_organization_id`` is the organization the session acts in, or ``None`` for an account with no
     live membership. ``new_account`` is true when the sign-in created the account, or is the first way in to
-    one nobody had claimed.
+    one nobody had claimed. ``password_removed`` is true when the sign-in removed a password the account held.
     """
 
     account: User
@@ -49,6 +54,19 @@ class SignIn:
     new_account: bool
     session_token: str
     session_expires_at: datetime
+    password_removed: bool = False
+
+
+@dataclass(frozen=True)
+class PasswordLink:
+    """A link that sets an account's password, and how it reaches the person.
+
+    ``link`` is set only when the link was not mailed, for whoever asked to pass it on.
+    """
+
+    mail_sent: bool
+    link: str | None
+    expires_at: datetime
 
 
 class IdentityService:
@@ -67,6 +85,9 @@ class IdentityService:
         sign_in_listener: SignInListener,
         session_ttl_hours: int,
         terms_url: str | None,
+        mailer: Mailer,
+        open_signup: bool,
+        password_reset_expiry_hours: int,
     ) -> None:
         """``terms_url`` is the terms the deployment publishes, or ``None`` where it publishes none."""
         self._uow = uow
@@ -78,6 +99,9 @@ class IdentityService:
         self._sign_in_listener = sign_in_listener
         self._session_ttl_hours = session_ttl_hours
         self._terms_url = terms_url
+        self._mailer = mailer
+        self._open_signup = open_signup
+        self._password_reset_expiry_hours = password_reset_expiry_hours
 
     async def sign_in_with_oauth(self, external: ProviderIdentity, *, terms_accepted: bool = False) -> SignIn:
         """Sign in the account that an identity a provider has proven belongs to.
@@ -109,7 +133,7 @@ class IdentityService:
             if resolution.new_account:
                 self._record_terms(resolution.identity, terms_accepted=terms_accepted)
             signed_in = await self.sign_in(resolution.identity)
-        return replace(signed_in, new_account=resolution.new_account)
+        return replace(signed_in, new_account=resolution.new_account, password_removed=resolution.password_removed)
 
     async def sign_in(self, account: User) -> SignIn:
         """Sign in an account that has proven who it is, and start its dashboard session.
@@ -143,6 +167,71 @@ class IdentityService:
             session_expires_at=expires_at,
         )
 
+    async def issue_password_link(self, account_id: uuid.UUID) -> PasswordLink:
+        """Give an account a single-use link that sets its password, for someone who operates the deployment.
+
+        Where this deployment can mail links, the link is mailed to the account's address and not returned.
+        Otherwise, or when the send fails, a shared link is returned for the caller to pass on; redeeming it
+        records the address as vouched for rather than proven, since the mailbox never saw it.
+        A new link replaces any earlier reset link.
+
+        Raises:
+            DeploymentUserNotFoundError: If there is no such account.
+            PasswordLinkUnavailableError: If the account is deactivated, has no address, is verified and has no
+                password, or is unverified and ``unverified_identity_is_claimable`` refuses it.
+
+        """
+        mailed = self._mailer.can_send_links
+        async with self._uow:
+            account = await self._users.get_locked(account_id)
+            if account is None:
+                raise DeploymentUserNotFoundError(account_id)
+            await self._require_password_link_allowed(account)
+            token = generate_token() if mailed else generate_shared_token()
+            expires_at = self._stage_reset_token(account, token)
+        assert account.email is not None  # guaranteed by _require_password_link_allowed
+
+        if mailed:
+            delivery = await self._mailer.send(
+                to=account.email,
+                message=render_password_reset_email(
+                    reset_link=self._mailer.link(_reset_path(token)),
+                    expiry_hours=self._password_reset_expiry_hours,
+                ),
+            )
+            if delivery.delivered:
+                logger.info("Mailed a password link for account %s", account.id)
+                return PasswordLink(mail_sent=True, link=None, expires_at=expires_at)
+            # The mailed token is replaced, so the link handed back is the only one that works.
+            async with self._uow:
+                token = generate_shared_token()
+                expires_at = self._stage_reset_token(account, token)
+        logger.info("Issued a password link to pass on for account %s", account.id)
+        return PasswordLink(mail_sent=False, link=self._mailer.link(_reset_path(token)), expires_at=expires_at)
+
+    async def _require_password_link_allowed(self, account: User) -> None:
+        if not account.is_active:
+            raise PasswordLinkUnavailableError("This account is deactivated. Reactivate it first.")
+        if account.email is None:
+            raise PasswordLinkUnavailableError("This account has no email address to sign in with.")
+        if account.hashed_password is None and account.email_verified_at is not None:
+            raise PasswordLinkUnavailableError(
+                "This account has no password and signs in with a provider or a passkey. "
+                "Once signed in, its owner can add a password from Account settings."
+            )
+        if not await unverified_identity_is_claimable(self._organizations, account, open_signup=self._open_signup):
+            raise PasswordLinkUnavailableError(
+                "No organization still has this unverified address as a member or invitee. "
+                "Add or invite it again first."
+            )
+
+    def _stage_reset_token(self, account: User, token: str) -> datetime:
+        expires_at = datetime.now(UTC) + timedelta(hours=self._password_reset_expiry_hours)
+        account.password_reset_token_hash = hash_token(token)
+        account.password_reset_token_expires_at = expires_at
+        self._users.stage(account)
+        return expires_at
+
     async def _account_for(self, external: ProviderIdentity, label: str) -> IdentityResolution:
         link = await self._links.get_by_identity(provider=external.provider, subject=external.subject)
         if link is not None:
@@ -161,7 +250,7 @@ class IdentityService:
                 account.id,
             )
             raise OAuthAccountLinkedElsewhereError(label)
-        return IdentityResolution(identity=account, new_account=resolution.new_account)
+        return replace(resolution, identity=account)
 
     def _record_terms(self, account: User, *, terms_accepted: bool) -> None:
         """Stage the acceptance of the published terms on a new account, or refuse one that has none.
@@ -181,3 +270,7 @@ class IdentityService:
         if account is None or not account.is_active:
             raise OAuthIdentityUnknownError(label)
         return account
+
+
+def _reset_path(token: str) -> str:
+    return f"/#/reset-password?token={token}"

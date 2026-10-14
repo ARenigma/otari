@@ -68,6 +68,7 @@ from gateway.exceptions.identity_exceptions import (
     SignInAddressRequiredError,
     TermsNotAcceptedError,
     UnmodifiedPasswordError,
+    VerificationPasswordIncorrectError,
     VerificationTokenInvalidError,
 )
 from gateway.models.tenancy import CallerIdentityPublic, User
@@ -76,6 +77,7 @@ from gateway.repositories.identity import WebAuthnCredentialRepository
 from gateway.repositories.tenancy import UserRepository
 from gateway.services.dashboard_session_service import revoke_user_dashboard_sessions
 from gateway.services.mail import Mailer
+from gateway.services.oauth_service import provider_label
 from gateway.services.password_service import (
     hash_password_async,
     verify_absent_password_async,
@@ -84,9 +86,9 @@ from gateway.services.password_service import (
 from gateway.services.tenancy.email_address import validated_email
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.tenancy.password_policy import validate_new_password
-from gateway.services.tenancy.password_reset_email import render_password_reset_email
+from gateway.services.tenancy.password_reset_email import render_account_exists_email, render_password_reset_email
 from gateway.services.tenancy.provisioning_service import load_bootstrap_identity, password_claims_deployment
-from gateway.services.tenancy.tokens import generate_token, hash_token
+from gateway.services.tenancy.tokens import generate_token, hash_token, is_shared_token
 from gateway.services.tenancy.verification_email import render_verification_email
 
 # The unique index alembic creates on ``user.email`` (c4b6d8e0f2a3).
@@ -356,8 +358,9 @@ async def create_user_for_signup(
     (``OrganizationService.provision_signup_tenancy``), which is how a control
     plane serving many tenants takes its first member of each.
 
-    A refusal writes nothing and mails nothing, so it does not reveal which addresses hold an account.
+    A refusal writes nothing and answers like a claim, so it does not reveal which addresses hold an account.
     An address that has a password, an address that is already verified, and a deactivated identity are refused.
+    An address that is already verified is mailed a notice that it has an account and how it signs in.
     An unknown address is registered where ``open_signup`` is on, and refused otherwise.
     An identity ``unverified_identity_is_claimable`` refuses is refused too.
     A verified address is refused because a password set on it would sign in with no proof of the mailbox.
@@ -400,6 +403,8 @@ async def create_user_for_signup(
         # of the gap the way ``authenticate`` already does for a sign-in on an
         # address with no stored hash.
         await verify_absent_password_async(password)
+        if identity.is_active and identity.email_verified_at is not None:
+            _schedule_account_exists_notice(mailer, identity, background_tasks=background_tasks, to=address)
         return None
     try:
         async with uow:
@@ -474,14 +479,18 @@ async def verify_email(
     One error for unknown, expired, already-consumed, and deactivated: a token
     that no longer resolves to a row (cleared by a prior use, or never issued),
     one whose expiry has passed, one whose identity has been deactivated
-    since it was issued, one presented with the wrong password, and one whose
-    identity ``unverified_identity_is_claimable`` refuses all raise ``VerificationTokenInvalidError``, the same
+    since it was issued, and one whose identity ``unverified_identity_is_claimable``
+    refuses all raise ``VerificationTokenInvalidError``, the same
     collapse ``InvitationNotFoundError`` gives an invitation token for the same
     reason. The deactivation check matches ``resolve_dashboard_session`` and
     ``authenticate``: deactivating someone has to end every road back in, not
     just the one ``authenticate`` itself checks. Single-use is the hash and
     expiry columns going back to ``NULL`` on success: a replayed token then
     matches no row at all.
+
+    A token that would otherwise verify, presented with the wrong password,
+    raises ``VerificationPasswordIncorrectError`` instead, so the person knows
+    the link still works. Only a holder of the link learns that.
 
     Locked, then re-resolved, before any write: two concurrent verifications
     of the same token could otherwise both read a live, unexpired hash
@@ -500,10 +509,10 @@ async def verify_email(
         raise VerificationTokenInvalidError
     if identity.email_verification_token_expires_at < datetime.now(UTC):
         raise VerificationTokenInvalidError
-    if identity.hashed_password is None or not await verify_password_async(password, identity.hashed_password):
-        raise VerificationTokenInvalidError
     if not await unverified_identity_is_claimable(organizations, identity, open_signup=open_signup):
         raise VerificationTokenInvalidError
+    if identity.hashed_password is None or not await verify_password_async(password, identity.hashed_password):
+        raise VerificationPasswordIncorrectError
 
     identity.email_verified_at = datetime.now(UTC)
     identity.email_verification_token_hash = None
@@ -594,17 +603,20 @@ async def request_password_reset(
     password" is what that person tries. Completing it verifies the address.
     An unverified identity is held to ``unverified_identity_is_claimable``. A verified
     identity with no password signs in with a provider and adds a password from
-    its account, so it is left alone here as signup leaves it alone.
+    its account, so it gets no link; it is mailed a notice saying how it signs in instead.
     """
     mailer = Mailer(config)
     mailer.require_ready()
 
     address = validated_email(email)
     identity = await UserRepository(db).get_by_email(address)
+    if identity is not None and identity.is_active and _signs_in_only_without_password(identity):
+        await verify_absent_password_async(_TIMING_EQUALIZER)
+        _schedule_account_exists_notice(mailer, identity, background_tasks=background_tasks, to=address)
+        return
     if (
         identity is None
         or not identity.is_active
-        or (identity.hashed_password is None and identity.email_verified_at is not None)
         or not await unverified_identity_is_claimable(organizations, identity, open_signup=config.open_signup)
     ):
         await verify_absent_password_async(_TIMING_EQUALIZER)
@@ -656,6 +668,10 @@ async def reset_password(
     passkeys registered before it go as well as the sessions
     (``forget_unproven_access``).
 
+    A shared token (``is_shared_token``) reached the person through an operator rather than the mailbox, so it
+    proves nothing about the address: completing it records the address as vouched for, the way a password
+    chosen through an invitation link does. A later provider sign-in or emailed reset then proves it.
+
     No current password to prove, unlike ``update_password``: that is the
     entire point of a reset. Every other session this identity holds is
     revoked, the same as an ordinary password change, so a session opened
@@ -696,8 +712,8 @@ async def reset_password(
     identity.hashed_password = await hash_password_async(new_password)
     identity.password_reset_token_hash = None
     identity.password_reset_token_expires_at = None
-    # The reset link went to the mailbox, which proves the address as well as what a vouch only asserted.
-    identity.email_vouched_at = None
+    # A mailed link proves the address as well as what a vouch only asserted; a shared one proves neither.
+    identity.email_vouched_at = now if is_shared_token(token) else None
     if identity.email_verified_at is None:
         identity.email_verified_at = now
         identity.email_verification_token_hash = None
@@ -705,6 +721,26 @@ async def reset_password(
     db.add(identity)
     await db.commit()
     return identity if first_claim else None
+
+
+def _signs_in_only_without_password(identity: User) -> bool:
+    """Whether a verified identity has no password, so it signs in with a provider or a passkey."""
+    return identity.hashed_password is None and identity.email_verified_at is not None
+
+
+def _schedule_account_exists_notice(
+    mailer: Mailer, identity: User, *, background_tasks: BackgroundTasks, to: str
+) -> None:
+    """Mail ``to`` that it already has an account and how it signs in, after the response is sent."""
+    background_tasks.add_task(
+        mailer.send,
+        to=to,
+        message=render_account_exists_email(
+            sign_in_link=mailer.link("/"),
+            has_password=identity.hashed_password is not None,
+            provider=provider_label(identity.oauth_provider) if identity.oauth_provider else None,
+        ),
+    )
 
 
 async def _locked_reset_identity(

@@ -8,7 +8,11 @@
 // is gone on reload.
 
 import type { QueryClient } from "@tanstack/react-query"
-import type { OAuthAuthorizeResponse, OAuthCallbackRequest } from "@/client"
+import type {
+  OAuthAuthorizeResponse,
+  OAuthCallbackRequest,
+  OAuthSessionResponse,
+} from "@/client"
 import { requestPolicy } from "@/shared/api/overlayRequestPolicy"
 import { getPasskeyAssertion } from "@/shared/helpers/webauthn"
 
@@ -314,12 +318,17 @@ export async function startOAuthSignIn(
 // before leaving, which a sign-in that creates their account needs; the gateway
 // ignores it otherwise. A refusal for want of them throws an `ApiError` whose
 // `code` is `terms_not_accepted`.
+//
+// `passwordRemoved` carries the gateway's `password_removed`: the first
+// provider sign-in on an address nobody had proven removes the password set on
+// it before then, and the person has to be told rather than find out at the
+// next password sign-in.
 export async function completeOAuthSignIn(
   provider: string,
   code: string,
   state: string,
   termsAccepted: boolean,
-): Promise<SignInResult> {
+): Promise<SignInResult & { passwordRemoved: boolean }> {
   const payload: OAuthCallbackRequest = {
     code,
     state,
@@ -329,9 +338,16 @@ export async function completeOAuthSignIn(
     `/auth/oauth/${encodeURIComponent(provider)}/callback`,
     payload,
   )
-  return finished.isOk
-    ? { isOk: true }
-    : { isOk: false, message: finished.message, status: finished.status }
+  if (!finished.isOk) {
+    return {
+      isOk: false,
+      message: finished.message,
+      status: finished.status,
+      passwordRemoved: false,
+    }
+  }
+  const session = finished.body as Partial<OAuthSessionResponse> | undefined
+  return { isOk: true, passwordRemoved: session?.password_removed === true }
 }
 
 // One unauthenticated GET, with the same error handling `publicPost` gives its

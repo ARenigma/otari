@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from gateway.exceptions.identity_exceptions import (
     InvalidEmailError,
+    OAuthEmailMissingError,
     OAuthEmailNotVerifiedError,
     OAuthIdentityUnknownError,
 )
@@ -54,7 +55,7 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
           An account that already names a provider keeps it.
         - It marks an unverified address verified, which lets a deployment with no mail admit a member.
           Verifying the address also removes its password, its pending email verification and reset tokens,
-          its sessions and its passkeys.
+          its sessions and its passkeys, and ``password_removed`` says whether there was a password.
           The provider confirms who owns the address, not who set a password on it while it was unverified.
           A password on an address that is already verified is kept.
         - It sets ``full_name`` if the account has none.
@@ -74,7 +75,8 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
         organization added and nobody had claimed.
 
         Raises:
-            OAuthEmailNotVerifiedError: If the provider returned no address, or one it did not verify.
+            OAuthEmailMissingError: If the provider returned no address.
+            OAuthEmailNotVerifiedError: If the provider did not verify the address.
             OAuthIdentityUnknownError: If a tenant can set the provider's email claim,
                 or no active account holds the address and ``open_signup`` does not register a new one.
 
@@ -82,7 +84,9 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
         label = provider_label(external.provider)
         if not trusts_email_claim(external.provider):
             raise OAuthIdentityUnknownError(label)
-        if external.email_verified is not EmailAssertion.VERIFIED or not external.email:
+        if not external.email:
+            raise OAuthEmailMissingError(label)
+        if external.email_verified is not EmailAssertion.VERIFIED:
             raise OAuthEmailNotVerifiedError(label)
         # An address this gateway would never store names no account, so it is refused as unknown.
         try:
@@ -122,7 +126,9 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
                 raise OAuthIdentityUnknownError(label)
         if identity.oauth_provider is None:
             identity.oauth_provider = external.provider
+        password_removed = False
         if identity.email_verified_at is None or identity.email_vouched_at is not None:
+            password_removed = identity.hashed_password is not None
             identity.email_verified_at = datetime.now(UTC)
             identity.email_vouched_at = None
             # The address was unverified, or only vouched for, when these were set, so they may not be this person's.
@@ -135,7 +141,9 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
         if not identity.full_name and external.full_name:
             identity.full_name = external.full_name
         self._users.stage(identity)
-        return IdentityResolution(identity=identity, new_account=created or first_claim)
+        return IdentityResolution(
+            identity=identity, new_account=created or first_claim, password_removed=password_removed
+        )
 
 
 __all__ = ["DeploymentIdentityProviderAdapter"]

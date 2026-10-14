@@ -1113,6 +1113,21 @@ def create_app(config: GatewayConfig) -> FastAPI:
                 status_code=status.HTTP_303_SEE_OTHER,
             )
 
+    else:
+
+        @app.get("/auth/{provider}/callback", include_in_schema=False)
+        async def oauth_callback_landing_disabled() -> JSONResponse:
+            """Explain to a provider redirect or an old bookmark that sign-in happens on the platform.
+
+            The wording matches the hybrid stubs under the API root, which this path is outside of.
+            """
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "detail": "Dashboard sign-in is not available in hybrid mode. Sign in through the platform UI."
+                },
+            )
+
     @app.get("/welcome", response_class=HTMLResponse, include_in_schema=False)
     async def root_tutorial() -> str:
         return ROOT_TUTORIAL_HTML
