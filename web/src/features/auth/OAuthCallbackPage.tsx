@@ -15,7 +15,7 @@ import {
   PublicAuthLayout,
   PublicAuthLink,
 } from "./PublicAuthLayout"
-import { signInReturnHash } from "./publicAuthPaths"
+import { resolveSignInReturnHash } from "./publicAuthPaths"
 
 /**
  * Where the CSRF `state` waits while the browser is away at the provider.
@@ -64,7 +64,7 @@ function takeOAuthState(): string | null {
 function takeOAuthReturn(): string {
   const stored = window.sessionStorage.getItem(RETURN_KEY) ?? ""
   window.sessionStorage.removeItem(RETURN_KEY)
-  return signInReturnHash(stored)
+  return resolveSignInReturnHash(stored)
 }
 
 /**

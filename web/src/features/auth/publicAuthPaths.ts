@@ -116,7 +116,7 @@ export function rendersAheadOfRouter(pathname: string): boolean {
  * leave this document; `#//` and `#/\` are refused too, since either reads as
  * another origin to anything that later treats the path as a URL.
  */
-export function signInReturnHash(hash: string): string {
+export function resolveSignInReturnHash(hash: string): string {
   return /^#\/(?![/\\])/.test(hash) && !rendersAheadOfRouter(hash) ? hash : "#/"
 }
 

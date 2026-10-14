@@ -8,7 +8,7 @@ import {
   PUBLIC_AUTH_PAGES,
   publicAuthPath,
   rendersAheadOfRouter,
-  signInReturnHash,
+  resolveSignInReturnHash,
 } from "@/features/auth/publicAuthPaths"
 
 describe("isAcceptInvitationPath", () => {
@@ -26,13 +26,13 @@ describe("isAcceptInvitationPath", () => {
   })
 })
 
-describe("signInReturnHash", () => {
+describe("resolveSignInReturnHash", () => {
   it("keeps a page the router serves, query string and all", () => {
-    expect(signInReturnHash("#/organization/billing")).toBe(
+    expect(resolveSignInReturnHash("#/organization/billing")).toBe(
       "#/organization/billing",
     )
-    expect(signInReturnHash("#/usage?range=7d")).toBe("#/usage?range=7d")
-    expect(signInReturnHash("#/models/z-ai/glm-5.3")).toBe(
+    expect(resolveSignInReturnHash("#/usage?range=7d")).toBe("#/usage?range=7d")
+    expect(resolveSignInReturnHash("#/models/z-ai/glm-5.3")).toBe(
       "#/models/z-ai/glm-5.3",
     )
   })
@@ -47,7 +47,7 @@ describe("signInReturnHash", () => {
       "#/reset-password?token=t",
       "#/accept-invitation?token=t",
     ]) {
-      expect(signInReturnHash(hash)).toBe("#/")
+      expect(resolveSignInReturnHash(hash)).toBe("#/")
     }
   })
 
@@ -62,7 +62,7 @@ describe("signInReturnHash", () => {
       "#//evil.example",
       "#/\\evil.example",
     ]) {
-      expect(signInReturnHash(value)).toBe("#/")
+      expect(resolveSignInReturnHash(value)).toBe("#/")
     }
   })
 })
