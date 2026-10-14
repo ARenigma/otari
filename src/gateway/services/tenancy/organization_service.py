@@ -33,6 +33,7 @@ from gateway.exceptions.organizations_exceptions import (
     InvitationNotFoundError,
     InvitationPasswordNotAcceptedError,
     MembershipUpdateError,
+    NoActiveOrganizationError,
     NotAuthorizedError,
     OrganizationMemberAddressUnprovenError,
     OrganizationMemberAddressUnresolvedError,
@@ -564,12 +565,14 @@ class OrganizationService:
 
         Unlike the platform this never provisions an organization as a fallback:
         first boot owns that (see `provisioning_service`), and every later
-        identity is created inside the one that already exists.
+        identity is created inside the one that already exists. A caller with
+        no live membership is refused as belonging to no organization, without
+        naming the one the pointer still holds.
         """
         stale_id = user.active_organization_id
         organization = await self._live_active_organization(user, repair=True)
         if organization is None:
-            raise OrganizationNotFoundError(stale_id)
+            raise NoActiveOrganizationError
         if organization.id != stale_id:
             await self.db.commit()
         return organization
@@ -694,24 +697,40 @@ class OrganizationService:
             await self._found_own_tenancy(identity, organization, address=address)
             return SignupRegistration(identity=identity, created=True)
 
-    async def provision_tenancy_for_claim(self, identity: User, *, full_name: str | None) -> bool:
-        """Give an existing identity an organization and workspace of its own, point it at them, and say if it did.
+    async def provision_tenancy_for_claim(
+        self,
+        identity: User,
+        *,
+        open_signup: bool,
+        full_name: str | None,
+        replaces_unproven: bool = False,
+    ) -> bool:
+        """Settle the tenancy of an identity whose address is being claimed, before the claim is written.
 
-        For an identity a claim takes under open signup while no organization
-        still wants it (its invitation was revoked, declined or lapsed, or it was
-        removed): it gets what a new address gets, and its active and default
-        organizations move to the one it owns, so nothing keeps pointing at an
-        organization it no longer belongs to.
+        It acts only while the address is unproven, so at most once per identity: an address proven
+        earlier that later loses its last membership is left without an organization on purpose, since
+        a decline or a removal must not found a tenant at the next sign-in.
 
-        The identity is locked and asked again inside the block, so of two
-        claims racing on it only the first founds an organization; the second
-        finds the membership the first committed and does nothing.
+        ``replaces_unproven`` marks a proof of the mailbox taking over an unverified signup, whose chosen
+        name came from whoever signed up rather than the owner.
+
+        The identity is locked and asked again inside the block, so of two claims racing on it only the
+        first founds an organization.
+
+        Returns False, having opened no block, when there is nothing to settle. Otherwise True, after a
+        block that commits, and so releases the identity's lock, when the caller holds none.
         """
+        replaces_unproven = replaces_unproven and identity.email_verified_at is None
+        unproven = identity.email_verified_at is None or identity.email_vouched_at is not None
+        if not replaces_unproven and not (open_signup and unproven):
+            return False
+        assert identity.email is not None  # a claim is always by address
         async with self._require_unit_of_work():
             await self.users.lock(identity.id)
-            if await self.has_live_membership(identity.id):
-                return False
-            assert identity.email is not None  # a claim is always by address
+            if replaces_unproven:
+                await self._forget_unproven_name(identity, address=identity.email, full_name=full_name)
+            if not open_signup or not unproven or await self.has_live_membership(identity.id):
+                return True
             name = _default_organization_name(identity.email, full_name or identity.full_name)
             organization = await self.organizations.create_organization(
                 name=name,
@@ -721,6 +740,22 @@ class OrganizationService:
             await self._found_own_tenancy(identity, organization, address=identity.email)
             await self.users.set_home_organization(identity, organization.id)
         return True
+
+    async def _forget_unproven_name(self, identity: User, *, address: str, full_name: str | None) -> None:
+        """Stage ``full_name`` on the identity, and rename the organization its signup founded if it is alone there."""
+        identity.full_name = full_name
+        self.users.stage(identity)
+        if identity.default_organization_id is None:
+            return
+        organization = await self.organizations.get(identity.default_organization_id)
+        if organization is None or organization.created_by_user_id != identity.id:
+            return
+        own = await self.members.get_by_organization_and_user(organization.id, identity.id)
+        if own is None or await self.members.get_ids_by_organization(organization.id) != [own.id]:
+            return
+        await self.organizations.update_organization(
+            organization, {"name": _default_organization_name(address, full_name)}
+        )
 
     async def _found_own_tenancy(self, identity: User, organization: Organization, *, address: str) -> None:
         """Make the identity the owner of a fresh organization, with a workspace to work in."""
@@ -2047,7 +2082,22 @@ class OrganizationService:
             pending = await self.invitations.get_pending_by_organization_members([updated.id])
             for invitation in pending:
                 await self.invitations.update_status(invitation, {"status": "cancelled"})
+        if updated.status == "suspended":
+            await self._move_off_ended_membership(updated)
         return updated
+
+    async def _move_off_ended_membership(self, membership: OrganizationMember) -> None:
+        """Stage the identity's active organization onto its oldest live membership, if it named the one that ended.
+
+        With no live membership left the pointer stays, because the column cannot be empty; every read
+        resolves it against a live membership and finds none.
+        """
+        identity = await self.users.get(membership.user_id)
+        if identity is None or identity.active_organization_id != membership.organization_id:
+            return
+        fallback = await self.members.get_first_active_for_user(identity.id)
+        if fallback is not None:
+            await self.users.set_active_organization(identity, fallback.organization_id)
 
     async def _identity_for_address(self, email: str, organization: Organization) -> User:
         """The identity holding an address, created claimable if none does, refusing a deactivated one.

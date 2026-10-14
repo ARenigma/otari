@@ -20201,6 +20201,15 @@ export interface operations {
                     "application/json": components["schemas"]["OrganizationMembershipContextPublic"];
                 };
             };
+            /** @description The caller is an active member of no organization. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationRefusal"];
+                };
+            };
         };
     };
     "organizations-update_active_organization": {

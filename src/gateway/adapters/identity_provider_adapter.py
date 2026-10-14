@@ -58,7 +58,8 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
           its sessions and its passkeys, and ``password_removed`` says whether there was a password.
           The provider confirms who owns the address, not who set a password on it while it was unverified.
           A password on an address that is already verified is kept.
-        - It sets ``full_name`` if the account has none.
+        - It sets ``full_name`` if the account has none, and on an unverified address replaces it,
+          since whoever signed up chose that name rather than the provider's verified owner.
 
         NOTE: Concurrent sign-ins on one account are serialized on PostgreSQL only.
         On SQLite, the later of two concurrent sign-ins can overwrite the provider that the first recorded.
@@ -66,10 +67,8 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
         An account nobody has verified yet is signed in only where ``unverified_identity_is_claimable`` allows,
         the rule the signup form and a password reset follow.
 
-        Under ``open_signup``, claiming an unverified account that no organization still wants (its
-        invitation revoked, declined or lapsed, or the member removed) gives it an organization and
-        workspace of its own and points it at them, the way a new account is created. The account is then
-        read again under a lock before this sign-in changes it.
+        Settling the claimed account's tenancy commits a block, which releases the lock, so the account
+        is read again under a lock before this sign-in changes it.
 
         ``new_account`` is true when this sign-in created the account, or is the first way in to one an
         organization added and nobody had claimed.
@@ -118,9 +117,13 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
             raise OAuthIdentityUnknownError(label)
 
         first_claim = identity.hashed_password is None and identity.email_verified_at is None
-        if not created and self._open_signup and identity.email_verified_at is None:
-            await self._organizations.provision_tenancy_for_claim(identity, full_name=external.full_name)
-            # Provisioning pointed the account at its new organization, so it is read again.
+        if not created and await self._organizations.provision_tenancy_for_claim(
+            identity,
+            open_signup=self._open_signup,
+            full_name=external.full_name,
+            replaces_unproven=True,
+        ):
+            # Provisioning may have pointed the account at a new organization, so it is read again.
             identity = await self._users.get_locked(identity.id)
             if identity is None or not identity.is_active:
                 raise OAuthIdentityUnknownError(label)
