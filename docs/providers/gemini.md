@@ -43,9 +43,12 @@ Models are addressed as `gemini:<model>`:
 
 ```text
 gemini:gemini-3-flash-preview
+gemini:gemini-3.1-flash-lite-preview
 ```
 
 Everything after the colon is passed straight to Gemini, so any model your key can access works. Google retires older models for new keys, so check the [model list](https://ai.google.dev/gemini-api/docs/models) if a name is rejected.
+
+Chat completions take only text-generation models. Embedding models such as `gemini-embedding-001` do not work there; send them to `POST /api/v1/embeddings` instead (see the [API reference](../api-reference.md)).
 
 ## Verify
 
