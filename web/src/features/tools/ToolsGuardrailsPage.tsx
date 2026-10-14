@@ -501,7 +501,6 @@ export function ToolsGuardrailsPage({ only }: { only?: ToolServiceName } = {}) {
               />
             ) : service.key === "web_search" ? (
               <WorkspaceWebSearchCard
-                isHosted={isHosted}
                 // Unknown until the tool list answers, and a failed read must
                 // not lock the switch over tools that may well run.
                 isAvailable={

@@ -10,7 +10,8 @@ A workspace row may veto and may refine, and it never grants.
 ``executor`` pins who runs a provider-named code-execution declaration (``auto``, ``otari`` or ``provider``)
 over the deployment default and the request's header. It is a choice rather than a narrowing, and it grants
 no sandbox the deployment has not configured.
-No row means no narrowing.
+No row means no narrowing, unless the deployment makes code execution opt-in
+(``code_execution_workspace_default``), where it means off.
 Reads and writes both require an owner or admin of the organization or of the workspace.
 The request path's read, with no identity and the workspace from the key, is
 :class:`WorkspaceCodeExecutionPolicies`.
@@ -166,6 +167,9 @@ class WorkspaceCodeExecutionPolicyPublic(BaseModel):
     # hosted status enum plus reason string, because with one axis left there is
     # one thing to say and the dashboard says it in its own words.
     sandbox_configured: bool
+    # What a workspace with no policy gets on this deployment: on, or off until a
+    # workspace admin turns it on (``code_execution_workspace_default``).
+    default_enabled: bool
     # The images this deployment's operator has curated, which is the whole set
     # ``image`` may be set to. Reported alongside the policy rather than from a
     # second endpoint because a form that offers a free-text image would be
@@ -194,15 +198,17 @@ class WorkspaceCodeExecutionPolicyPublic(BaseModel):
         workspace_id: uuid.UUID,
         *,
         sandbox_configured: bool,
+        default_enabled: bool,
         allowed_images: tuple[str, ...],
     ) -> WorkspaceCodeExecutionPolicyPublic:
         return cls(
             workspace_id=workspace_id,
             configured=False,
             sandbox_configured=sandbox_configured,
+            default_enabled=default_enabled,
             allowed_images=list(allowed_images),
             available_tools=list(SERVED_TOOL_NAMES),
-            enabled=True,
+            enabled=default_enabled,
             default_purpose_hint=None,
             max_iterations=None,
             exec_timeout_s=None,
@@ -219,12 +225,14 @@ class WorkspaceCodeExecutionPolicyPublic(BaseModel):
         policy: WorkspaceCodeExecutionPolicy,
         *,
         sandbox_configured: bool,
+        default_enabled: bool,
         allowed_images: tuple[str, ...],
     ) -> WorkspaceCodeExecutionPolicyPublic:
         return cls(
             workspace_id=policy.workspace_id,
             configured=True,
             sandbox_configured=sandbox_configured,
+            default_enabled=default_enabled,
             allowed_images=list(allowed_images),
             available_tools=list(SERVED_TOOL_NAMES),
             enabled=policy.enabled,
@@ -309,6 +317,7 @@ class WorkspaceCodeExecutionPolicyService:
         access: WorkspaceAccess,
         *,
         sandbox_configured: bool,
+        default_enabled: bool,
         allowed_images: tuple[str, ...] = (),
     ):
         self._uow = uow
@@ -319,6 +328,7 @@ class WorkspaceCodeExecutionPolicyService:
         # deployment's config, which the route layer already holds and a service
         # has no business reaching for.
         self.sandbox_configured = sandbox_configured
+        self.default_enabled = default_enabled
         self.allowed_images = allowed_images
 
     async def get_policy(self, *, user: User, workspace_id: uuid.UUID) -> WorkspaceCodeExecutionPolicyPublic:
@@ -386,12 +396,18 @@ class WorkspaceCodeExecutionPolicyService:
 
     def _public(self, policy: WorkspaceCodeExecutionPolicy) -> WorkspaceCodeExecutionPolicyPublic:
         return WorkspaceCodeExecutionPolicyPublic.from_model(
-            policy, sandbox_configured=self.sandbox_configured, allowed_images=self.allowed_images
+            policy,
+            sandbox_configured=self.sandbox_configured,
+            default_enabled=self.default_enabled,
+            allowed_images=self.allowed_images,
         )
 
     def _unconfigured(self, workspace_id: uuid.UUID) -> WorkspaceCodeExecutionPolicyPublic:
         return WorkspaceCodeExecutionPolicyPublic.unconfigured(
-            workspace_id, sandbox_configured=self.sandbox_configured, allowed_images=self.allowed_images
+            workspace_id,
+            sandbox_configured=self.sandbox_configured,
+            default_enabled=self.default_enabled,
+            allowed_images=self.allowed_images,
         )
 
     async def _resolve_manageable(self, *, user: User, workspace_id: uuid.UUID) -> Workspace:

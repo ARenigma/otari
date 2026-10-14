@@ -441,6 +441,14 @@ class ToolSettings(BaseModel):
             "gateway, and every other keyword reaches the provider untouched. Requires a search backend."
         ),
     )
+    web_search_workspace_default: Annotated[bool | None, Shown(SettingsGroup.TOOLS)] = Field(
+        default=None,
+        description=(
+            "Whether a workspace with no web-access policy of its own may use otari_web_search, "
+            "otari_web_fetch and POST /api/v1/search. False makes web access something a workspace "
+            "admin turns on. When unset: on, except on a hosted deployment, where it is off."
+        ),
+    )
     web_search_allow_private_hosts: Annotated[bool, Shown(SettingsGroup.TOOLS)] = Field(
         default=False,
         description=(

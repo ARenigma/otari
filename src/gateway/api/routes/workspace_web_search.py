@@ -40,13 +40,14 @@ def get_workspace_web_search_service(
     """Build the service on the request's session.
 
     The backend-presence check is the same one ``prepare_gateway_tools`` makes
-    when it decides whether a request may declare ``otari_web_search``, so the
-    page and the request path agree about whether this deployment can search at
-    all.
+    when it decides whether a request may declare ``otari_web_search``, and the
+    default is the one the request path applies to a workspace with no row, so
+    the page and the request path agree.
     """
     return WorkspaceWebSearchService(
         db,
         web_search_configured=config.web_search_configured(),
+        default_enabled=config.web_search_on_without_policy(),
     )
 
 

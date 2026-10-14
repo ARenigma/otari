@@ -9,8 +9,7 @@ import { usePlaygroundTools } from "@/shared/api/playground"
  *
  * The workspace's own setting is for owners and admins, so this reads the
  * playground's per-workspace answer, which any member may and which reads "no
- * setting" the way the deployment does (on standalone, off on a hosted control
- * plane).
+ * setting" the way the request path does.
  */
 export function WorkspaceToolStatus({
   tool,

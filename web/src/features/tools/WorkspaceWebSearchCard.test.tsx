@@ -45,11 +45,9 @@ function mockApi({
 
 function renderCard({
   leading,
-  isHosted = false,
   isAvailable = true,
 }: {
   leading?: ReactNode
-  isHosted?: boolean
   isAvailable?: boolean
 } = {}) {
   const client = new QueryClient({
@@ -58,11 +56,7 @@ function renderCard({
   return render(
     <QueryClientProvider client={client}>
       <SelectedWorkspaceProvider>
-        <WorkspaceWebSearchCard
-          leading={leading}
-          isHosted={isHosted}
-          isAvailable={isAvailable}
-        />
+        <WorkspaceWebSearchCard leading={leading} isAvailable={isAvailable} />
       </SelectedWorkspaceProvider>
     </QueryClientProvider>,
   )
@@ -344,50 +338,26 @@ describe("WorkspaceWebSearchCard", () => {
     expect(toggle).toBeDisabled()
   })
 
-  describe("on a hosted control plane", () => {
-    // There a workspace with no row may not reach the web.
-    async function renderHosted() {
-      renderCard({ isHosted: true })
-      await waitFor(() =>
-        expect(screen.getByRole("switch", { name: SWITCH })).toBeEnabled(),
-      )
-    }
+  describe("where a workspace with no row is off", () => {
+    const optIn = (extra: Partial<WorkspaceWebSearchConfig> = {}) =>
+      workspaceWebSearchConfig({
+        workspace_id: ALPHA,
+        default_enabled: false,
+        enabled: false,
+        ...extra,
+      })
 
     it("reads no row as off", async () => {
-      mockApi()
-      await renderHosted()
+      mockApi({ config: optIn() })
+      await renderLoaded()
 
       expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked()
     })
 
-    it("shows a member the tools alone, without the playground's reading of a missing row", async () => {
-      const reads: string[] = []
-      vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-        const url = String(input)
-        if (url.includes("/playground/tools") || url.includes("/web-search")) {
-          reads.push(url)
-          return new Response("unexpected", { status: 500 })
-        }
-        return Response.json(
-          organizationContext({
-            role: "member",
-            workspace_memberships: [
-              { workspace_id: ALPHA, name: "Alpha", role: "member" },
-            ],
-          }),
-        )
-      })
-      renderCard({ leading: <div>tool rows</div>, isHosted: true })
-
-      expect(await screen.findByText("tool rows")).toBeInTheDocument()
-      expect(screen.queryByText("Allowed in Alpha")).toBeNull()
-      expect(reads).toEqual([])
-    })
-
-    it("turns on by storing an enabled row, never by deleting one", async () => {
-      const calls = mockApi()
+    it("turns on by storing an enabled row", async () => {
+      const calls = mockApi({ config: optIn() })
       const user = userEvent.setup()
-      await renderHosted()
+      await renderLoaded()
 
       await user.click(screen.getByRole("switch", { name: SWITCH }))
 
@@ -395,15 +365,35 @@ describe("WorkspaceWebSearchCard", () => {
       expect(calls.some((call) => call.method === "DELETE")).toBe(false)
     })
 
-    it("turns off by storing a disabled row", async () => {
-      const calls = mockApi({ config: allowed() })
+    it("turns off by dropping a row that narrows nothing else", async () => {
+      const calls = mockApi({
+        config: optIn({ configured: true, enabled: true }),
+      })
       const user = userEvent.setup()
-      await renderHosted()
+      await renderLoaded()
 
       expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked()
       await user.click(screen.getByRole("switch", { name: SWITCH }))
 
-      expect(await putBody(calls)).toMatchObject({ enabled: false })
+      await waitFor(() =>
+        expect(calls.some((call) => call.method === "DELETE")).toBe(true),
+      )
+      expect(calls.some((call) => call.method === "PUT")).toBe(false)
+    })
+
+    it("turns off by storing a disabled row where the row narrows something", async () => {
+      const calls = mockApi({
+        config: optIn({ configured: true, enabled: true, max_results: 3 }),
+      })
+      const user = userEvent.setup()
+      await renderLoaded()
+
+      await user.click(screen.getByRole("switch", { name: SWITCH }))
+
+      expect(await putBody(calls)).toMatchObject({
+        enabled: false,
+        max_results: 3,
+      })
       expect(calls.some((call) => call.method === "DELETE")).toBe(false)
     })
   })

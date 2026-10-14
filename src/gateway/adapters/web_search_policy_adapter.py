@@ -38,14 +38,17 @@ _NO_NARROWING = ResolvedWebSearchConfig(
     provider_options=None,
     authorized_tools=None,
 )
+# The policy of a workspace that holds no row where this deployment makes web access opt-in.
+_NOT_TURNED_ON = replace(_NO_NARROWING, enabled=False)
 
 
 class LocalWebSearchPolicy(WebSearchPolicyPort):
     """The policy stored in this deployment's own database."""
 
-    def __init__(self, session: AsyncSession, *, search_keys: WorkspaceSearchKeys) -> None:
+    def __init__(self, session: AsyncSession, *, search_keys: WorkspaceSearchKeys, on_without_policy: bool) -> None:
         self._session = session
         self._search_keys = search_keys
+        self._on_without_policy = on_without_policy
 
     async def resolve(
         self, scope: WebSearchPolicyScope, requested_tools: Sequence[WebTool]
@@ -57,6 +60,8 @@ class LocalWebSearchPolicy(WebSearchPolicyPort):
             policy = await resolve_workspace_web_search_config(self._session, scope.workspace_id)
         except InvalidStoredWebSearchDomainError:
             raise WebSearchPolicyResolutionFailedError(WebSearchPolicyResolutionFailure.STORED_POLICY_INVALID) from None
+        if policy is None and not self._on_without_policy:
+            return _NOT_TURNED_ON
         if WebTool.SEARCH not in requested_tools:
             return policy
         credential = await self._search_keys.credential_for(scope.workspace_id)

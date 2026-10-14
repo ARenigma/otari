@@ -468,6 +468,7 @@ def _with_session(port: PortKey[T], adapter: Callable[[AsyncSession], T]) -> Por
 
 
 def _local_web_search_policy(
+    config: GatewayConfig,
     search_keys: WorkspaceSearchKeysBuilder | None,
 ) -> Callable[[AsyncSession], WebSearchPolicyPort]:
     """Build the stored web search policy, which also reads the workspace's own search key."""
@@ -476,12 +477,15 @@ def _local_web_search_policy(
         if search_keys is None:
             msg = f"a search key resolver is required to build {_port_name(WebSearchPolicyPort)}"
             raise ContainerError(msg)
-        return LocalWebSearchPolicy(session, search_keys=search_keys(session))
+        return LocalWebSearchPolicy(
+            session, search_keys=search_keys(session), on_without_policy=config.web_search_on_without_policy()
+        )
 
     return build
 
 
 def _local_code_execution_policy(
+    config: GatewayConfig,
     policies: CodeExecutionPoliciesBuilder | None,
 ) -> Callable[[AsyncSession], CodeExecutionPolicyPort]:
     """Build the stored code execution policy."""
@@ -490,7 +494,7 @@ def _local_code_execution_policy(
         if policies is None:
             msg = f"a code execution policy reader is required to build {_port_name(CodeExecutionPolicyPort)}"
             raise ContainerError(msg)
-        return LocalCodeExecutionPolicy(policies(session))
+        return LocalCodeExecutionPolicy(policies(session), on_without_policy=config.code_execution_on_without_policy())
 
     return build
 
@@ -512,10 +516,12 @@ def _bind_workspace_ports(
     elif deployment_for(config).supports(Plane.CONTROL):
         container.bind(
             CodeExecutionPolicyPort,
-            _with_session(CodeExecutionPolicyPort, _local_code_execution_policy(code_execution_policies)),
+            _with_session(CodeExecutionPolicyPort, _local_code_execution_policy(config, code_execution_policies)),
         )
         container.bind(McpServerPort, _with_session(McpServerPort, LocalMcpServers))
-        container.bind(WebSearchPolicyPort, _with_session(WebSearchPolicyPort, _local_web_search_policy(search_keys)))
+        container.bind(
+            WebSearchPolicyPort, _with_session(WebSearchPolicyPort, _local_web_search_policy(config, search_keys))
+        )
     else:
         container.bind(CodeExecutionPolicyPort, _shared(RemoteCodeExecutionPolicy(config)))
         container.bind(McpServerPort, _shared(RemoteMcpServers(config)))
