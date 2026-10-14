@@ -5,10 +5,9 @@ import { type OAuthStartResult, startOAuthSignIn } from "@/shared/api/client"
  *
  * `sessionStorage` and not `localStorage`: the value is scoped to the tab that
  * started the flow and dies with it, so a stale state cannot outlive the tab or
- * be read by a second one. The gateway keeps no copy at all, which is the same
- * reason PKCE stays off there (`src/gateway/services/oauth_service.py`): a
- * value minted at authorize time has nowhere server-side to live until the
- * exchange, so the browser holds it and the callback page is what checks it.
+ * be read by a second one. The gateway checks the state again against its own
+ * record and the HttpOnly flow cookie (`src/gateway/services/oauth_service.py`);
+ * this copy is what binds a callback to the tab that started it.
  */
 const STATE_KEY = "otari.oauth.state"
 
@@ -23,6 +22,9 @@ export function rememberOAuthState(
   state: string,
   { termsAccepted = false }: { termsAccepted?: boolean } = {},
 ): void {
+  // A single-use CSRF nonce rather than a credential: it authorizes nothing on
+  // its own, since the exchange also needs the provider's code and the flow cookie.
+  // codeql[js/clear-text-storage-of-sensitive-data]
   window.sessionStorage.setItem(STATE_KEY, state)
   if (termsAccepted) {
     window.sessionStorage.setItem(TERMS_KEY, "true")
