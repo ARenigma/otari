@@ -98,5 +98,5 @@ jobs:
 
     - name: Run the packages' tests
       run: >-
-        "$RUNNER_TEMP/floors/bin/python" -m pytest -v -p no:cacheprovider -c /dev/null --rootdir integrations
+        "$RUNNER_TEMP/floors/bin/python" -m pytest -v -c integrations/e2e/pyproject.toml --rootdir integrations
         integrations/pydantic-ai-otari/tests integrations/langchain-otari/tests
