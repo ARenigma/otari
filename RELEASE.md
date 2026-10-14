@@ -196,26 +196,26 @@ lifecycle, and the per-SDK registries and secrets) see
 PyPI on their own versions, independent of Otari's. To release one:
 
 1. Bump `version` in `integrations/<package>/pyproject.toml` in an ordinary PR,
-   with a conventional title (`feat(integrations): ...` or `fix(integrations): ...`).
-2. Once it is merged, tag that commit on `main` and push the tag:
+   with a conventional title (`feat(integrations): ...` or `fix(integrations): ...`),
+   and merge it.
+2. Run **Otari Integrations Release** (`otari-integrations-release.yml`) from the
+   Actions tab on `main`, choosing the package.
+3. Approve the deployment when the run waits on the package's environment.
 
-   ```bash
-   git tag pydantic-ai-otari-v0.2.0 <merge-commit>
-   git push origin pydantic-ai-otari-v0.2.0
-   ```
-
-`otari-integrations-release.yml` then checks that the tag names the version the
-file declares on a commit that is on `main`, builds the package and publishes it.
-It creates no GitHub Release, so Otari's own release stays the repository's
-latest, and the release-triggered workflows (Docker image, SDK regeneration) do
-not run. Otari's `vX.Y.Z` tags and these `<package>-vX.Y.Z` tags share the
-repository, so everything that reads Otari's version from Git matches `v[0-9]*`
-only: `cliff.toml`, `otari-release.yml`, and the `describe_command` of the
-workspace members' setuptools-scm.
+The workflow reads the version from the package's `pyproject.toml` on `main` and
+refuses one whose tag already exists. After the approval it builds and publishes
+the package, then tags the commit `<package>-vX.Y.Z`; a failed or rejected
+publish leaves no tag. It creates no GitHub Release, so Otari's own release stays
+the repository's latest, and the release-triggered workflows (Docker image, SDK
+regeneration) do not run. Otari's `vX.Y.Z` tags and these `<package>-vX.Y.Z` tags
+share the repository, so everything that reads Otari's version from Git matches
+`v[0-9]*` only: `cliff.toml`, `otari-release.yml`, and the `describe_command` of
+the workspace members' setuptools-scm.
 
 Publishing uses PyPI trusted publishing, so no token is stored. Each project on
 PyPI trusts owner `mozilla-ai`, repository `otari`, workflow
 `otari-integrations-release.yml` and an environment of its own,
-`pypi-<package>` (`pypi-pydantic-ai-otari`, `pypi-langchain-otari`), which must
-exist on this repository. PyPI refuses two pending publishers with the same
-configuration, so a shared environment cannot be registered for both.
+`pypi-<package>` (`pypi-pydantic-ai-otari`, `pypi-langchain-otari`). PyPI refuses
+two pending publishers with the same configuration, so a shared environment
+cannot be registered for both. Each environment on this repository requires a
+reviewer's approval and can be deployed only from `main`.

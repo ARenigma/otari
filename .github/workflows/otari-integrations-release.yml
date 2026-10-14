@@ -1,14 +1,16 @@
 name: Otari Integrations Release
 
-# Publishes a package under integrations/ to PyPI when its tag is pushed:
-# `pydantic-ai-otari-v0.2.0` publishes integrations/pydantic-ai-otari at 0.2.0.
-# The version is bumped in that package's pyproject.toml by an ordinary PR
-# first; the tag only says which commit to ship, and must name the version the
-# file declares on a commit that is on main. See RELEASE.md.
+# Publishes a package under integrations/ to PyPI, started by hand (Run workflow,
+# on main) with the package to release. The version is the one its
+# pyproject.toml declares on main, bumped there by an ordinary PR first. The run
+# refuses a version whose tag already exists, waits for the environment's
+# reviewer, publishes, and only then tags the commit `<package>-vX.Y.Z`, so a
+# failed or rejected publish leaves no tag behind. See RELEASE.md.
 #
 # No GitHub Release is created. A Release here would become the repository's
 # "Latest" in place of Otari's own, and otari-docker.yml and
-# otari-sdk-codegen.yml run on every published Release.
+# otari-sdk-codegen.yml run on every published Release. The tag is pushed with
+# GITHUB_TOKEN, which starts no workflow.
 #
 # Publishing uses PyPI trusted publishing: no token is stored. Each project on
 # PyPI trusts this repository, this workflow file and its own environment,
@@ -17,10 +19,15 @@ name: Otari Integrations Release
 # package's publish from ever uploading the other.
 
 on:
-  push:
-    tags:
-      - 'pydantic-ai-otari-v*'
-      - 'langchain-otari-v*'
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to publish, at the version its pyproject.toml declares on main
+        required: true
+        type: choice
+        options:
+          - pydantic-ai-otari
+          - langchain-otari
 
 permissions:
   contents: read
@@ -29,40 +36,40 @@ jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
-      package: ${{ steps.package.outputs.package }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
+    - name: Refuse anything but main
+      if: github.ref != 'refs/heads/main'
+      run: |
+        echo "::error::Run this from main, not ${GITHUB_REF}: only reviewed and tested commits are published."
+        exit 1
+
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
-        fetch-depth: 0
 
     - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       with:
         python-version: "3.14"
 
-    - name: Check the tag against the package
-      id: package
+    - name: Read the version and refuse one already released
+      id: version
       env:
-        TAG: ${{ github.ref_name }}
+        PACKAGE: ${{ inputs.package }}
       run: |
-        PACKAGE="${TAG%-v*}"
-        VERSION="${TAG##*-v}"
-        DIR="integrations/$PACKAGE"
-        DECLARED="$(uv run --no-project python -c "import sys, tomllib; print(tomllib.load(open(sys.argv[1], 'rb'))['project']['version'])" "$DIR/pyproject.toml")"
-        if [ "$DECLARED" != "$VERSION" ]; then
-          echo "::error::$TAG names version $VERSION, but $DIR/pyproject.toml declares $DECLARED."
+        VERSION="$(uv run --no-project python -c "import sys, tomllib; print(tomllib.load(open(sys.argv[1], 'rb'))['project']['version'])" "integrations/$PACKAGE/pyproject.toml")"
+        TAG="$PACKAGE-v$VERSION"
+        if git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG" >/dev/null; then
+          echo "::error::$TAG already exists. Bump the version in integrations/$PACKAGE/pyproject.toml in a PR first."
           exit 1
         fi
-        if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-          echo "::error::$TAG is not on main, so it was never reviewed or tested there."
-          exit 1
-        fi
-        echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
+        echo "Publishing $PACKAGE $VERSION from $GITHUB_SHA"
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: check
     runs-on: ubuntu-latest
-    environment: pypi-${{ needs.check.outputs.package }}
+    environment: pypi-${{ inputs.package }}
     permissions:
       contents: read
       id-token: write
@@ -76,7 +83,21 @@ jobs:
         python-version: "3.14"
 
     - name: Build
-      run: uv build "integrations/${{ needs.check.outputs.package }}" --out-dir dist
+      env:
+        PACKAGE: ${{ inputs.package }}
+      run: uv build "integrations/$PACKAGE" --out-dir dist
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  tag:
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Tag the published commit
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ needs.check.outputs.tag }}
+      run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA"

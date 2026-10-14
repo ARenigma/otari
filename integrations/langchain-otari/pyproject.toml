@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-otari"
-# Bumped by hand in a PR; pushing `<name>-v<version>` publishes it (RELEASE.md).
+# Bumped by hand in a PR, then published by otari-integrations-release.yml (RELEASE.md).
 version = "0.1.0"
 description = "LangChain chat models served through an Otari gateway"
 readme = "README.md"
