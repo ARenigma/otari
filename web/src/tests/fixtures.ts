@@ -815,6 +815,8 @@ export function workspaceCodeExecutionPolicy(
     // policy: nothing configured, nothing narrowed.
     configured: false,
     sandbox_configured: true,
+    // What no policy means on this deployment: on, as on a default one.
+    default_enabled: true,
     // The default deployment has curated no images, so a workspace may pin
     // none. `available_tools` is what this deployment's sandbox serves, which
     // is one tool today, not the wider vocabulary a policy may be written in.
@@ -842,6 +844,8 @@ export function workspaceWebSearchConfig(
     // one: nothing configured, nothing narrowed.
     configured: false,
     web_search_configured: true,
+    // What no row means on this deployment: on, as on a default one.
+    default_enabled: true,
     enabled: true,
     max_results: null,
     purpose_hint: null,

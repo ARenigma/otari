@@ -156,3 +156,10 @@ providers:
 # 0 releases every sandbox when its request ends.
 # sandbox_container_idle_ttl_sec: 600
 # sandbox_container_max_lifetime_sec: 3600
+
+# What a workspace with no tool policy of its own gets. false makes web access
+# (search, fetch, POST /api/v1/search) or code execution something a workspace
+# owner or admin turns on. Unset: on, except on a hosted deployment.
+# See docs/configuration.md.
+# web_search_workspace_default: false
+# code_execution_workspace_default: false

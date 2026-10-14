@@ -712,6 +712,26 @@ def test_a_workspace_can_only_narrow_the_deployment_s_answer(
     }
 
 
+def test_a_workspace_with_no_row_is_off_where_the_deployment_makes_tools_opt_in(
+    client: TestClient,
+    world: _World,
+    test_config: GatewayConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The menu reads a missing row the way the request path does, so it offers nothing a request would be refused."""
+    monkeypatch.setenv("OTARI_WEB_SEARCH_URL", "http://127.0.0.1:9998/search")
+    monkeypatch.setenv("OTARI_SANDBOX_URL", "http://127.0.0.1:9999/sandbox")
+    monkeypatch.setattr(test_config, "web_search_workspace_default", False)
+    monkeypatch.setattr(test_config, "code_execution_workspace_default", False)
+
+    code, body = _request(client, world, "member", "GET", f"{_PREFIX}/tools", params=_ws(world))
+
+    assert code == status.HTTP_200_OK
+    not_on = {"configured": True, "enabled": False, "reason": "Not turned on for this workspace."}
+    assert body["web_search"] == not_on
+    assert body["code_execution"] == not_on
+
+
 # =============================================================================
 # The completion: billed to the caller, in their workspace, with no key
 # =============================================================================

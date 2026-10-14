@@ -149,6 +149,9 @@ class WorkspaceWebSearchConfigPublic(BaseModel):
     # this row sits under: a workspace switched on where the deployment has no
     # backend reads as unavailable rather than as working.
     web_search_configured: bool
+    # What a workspace with no row gets on this deployment: on, or off until a
+    # workspace admin turns it on (``web_search_workspace_default``).
+    default_enabled: bool
     enabled: bool
     max_results: int | None
     purpose_hint: str | None
@@ -159,12 +162,15 @@ class WorkspaceWebSearchConfigPublic(BaseModel):
     updated_at: str | None
 
     @classmethod
-    def unconfigured(cls, workspace_id: uuid.UUID, *, web_search_configured: bool) -> WorkspaceWebSearchConfigPublic:
+    def unconfigured(
+        cls, workspace_id: uuid.UUID, *, web_search_configured: bool, default_enabled: bool
+    ) -> WorkspaceWebSearchConfigPublic:
         return cls(
             workspace_id=workspace_id,
             configured=False,
             web_search_configured=web_search_configured,
-            enabled=True,
+            default_enabled=default_enabled,
+            enabled=default_enabled,
             max_results=None,
             purpose_hint=None,
             allowed_domains=None,
@@ -176,12 +182,13 @@ class WorkspaceWebSearchConfigPublic(BaseModel):
 
     @classmethod
     def from_model(
-        cls, config: WorkspaceWebSearchConfig, *, web_search_configured: bool
+        cls, config: WorkspaceWebSearchConfig, *, web_search_configured: bool, default_enabled: bool
     ) -> WorkspaceWebSearchConfigPublic:
         return cls(
             workspace_id=config.workspace_id,
             configured=True,
             web_search_configured=web_search_configured,
+            default_enabled=default_enabled,
             enabled=config.enabled,
             max_results=config.max_results,
             purpose_hint=config.purpose_hint,
@@ -259,7 +266,7 @@ def _stored_domains(value: object) -> tuple[str, ...] | None:
 class WorkspaceWebSearchService:
     """Read, upsert and clear one workspace's web-search configuration."""
 
-    def __init__(self, db: AsyncSession, *, web_search_configured: bool):
+    def __init__(self, db: AsyncSession, *, web_search_configured: bool, default_enabled: bool):
         self.db = db
         self.organizations = OrganizationService(
             db, membership_listener=None, workspace_listener=NullWorkspaceListener()
@@ -268,6 +275,7 @@ class WorkspaceWebSearchService:
         # question about the running deployment's config, which the route layer
         # already holds and a service has no business reaching for.
         self.web_search_configured = web_search_configured
+        self.default_enabled = default_enabled
 
     async def get_config(self, *, user: User, workspace_id: uuid.UUID) -> WorkspaceWebSearchConfigPublic:
         """The workspace's configuration. Reading it takes the same role as setting it."""
@@ -275,7 +283,7 @@ class WorkspaceWebSearchService:
         config = await self.db.get(WorkspaceWebSearchConfig, workspace.id)
         if config is None:
             return self._unconfigured(workspace.id)
-        return WorkspaceWebSearchConfigPublic.from_model(config, web_search_configured=self.web_search_configured)
+        return self._public(config)
 
     async def set_config(
         self,
@@ -320,7 +328,7 @@ class WorkspaceWebSearchService:
             self._apply(config, request)
             await self._commit()
         await self.db.refresh(config)
-        return WorkspaceWebSearchConfigPublic.from_model(config, web_search_configured=self.web_search_configured)
+        return self._public(config)
 
     async def clear_config(self, *, user: User, workspace_id: uuid.UUID) -> WorkspaceWebSearchConfigPublic:
         """Drop the workspace's configuration, returning it to the deployment's behavior.
@@ -361,9 +369,14 @@ class WorkspaceWebSearchService:
         config.blocked_domains = request.blocked_domains
         config.provider_options = request.provider_options
 
+    def _public(self, config: WorkspaceWebSearchConfig) -> WorkspaceWebSearchConfigPublic:
+        return WorkspaceWebSearchConfigPublic.from_model(
+            config, web_search_configured=self.web_search_configured, default_enabled=self.default_enabled
+        )
+
     def _unconfigured(self, workspace_id: uuid.UUID) -> WorkspaceWebSearchConfigPublic:
         return WorkspaceWebSearchConfigPublic.unconfigured(
-            workspace_id, web_search_configured=self.web_search_configured
+            workspace_id, web_search_configured=self.web_search_configured, default_enabled=self.default_enabled
         )
 
     async def _resolve_manageable(self, *, user: User, workspace_id: uuid.UUID) -> Workspace:

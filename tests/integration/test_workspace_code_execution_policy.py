@@ -73,6 +73,7 @@ def _service(
     db: AsyncSession,
     *,
     sandbox_configured: bool = True,
+    default_enabled: bool = True,
     allowed_images: tuple[str, ...] = (),
 ) -> WorkspaceCodeExecutionPolicyService:
     uow = UnitOfWork(db)
@@ -83,6 +84,7 @@ def _service(
             db, OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
         ),
         sandbox_configured=sandbox_configured,
+        default_enabled=default_enabled,
         allowed_images=allowed_images,
     )
 

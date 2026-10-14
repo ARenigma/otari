@@ -1420,6 +1420,14 @@ class GatewayConfig(
             "The explicit otari_code_execution type is always run by the gateway."
         ),
     )
+    code_execution_workspace_default: Annotated[bool | None, Shown(SettingsGroup.TOOLS)] = Field(
+        default=None,
+        description=(
+            "Whether a workspace with no code-execution policy of its own may run code on the sandbox. "
+            "False makes code execution something a workspace admin turns on. When unset: on, except on "
+            "a hosted deployment, where it is off."
+        ),
+    )
     mcp_allow_loopback: Annotated[bool, Shown(SettingsGroup.TOOLS)] = Field(
         default=True,
         description=(
@@ -2089,6 +2097,24 @@ class GatewayConfig(
         if self.effective_sandbox_provider() is not SandboxProvider.PROTOCOL:
             return True
         return bool(self.sandbox_url or otari_env("SANDBOX_URL"))
+
+    def web_search_on_without_policy(self) -> bool:
+        """Whether a workspace with no stored web-access policy may use the web tools.
+
+        The hosted fallback keeps the control plane's existing behavior and goes with hosted mode.
+        """
+        if self.web_search_workspace_default is not None:
+            return self.web_search_workspace_default
+        return not self.is_hosted_mode
+
+    def code_execution_on_without_policy(self) -> bool:
+        """Whether a workspace with no stored code-execution policy may use the sandbox.
+
+        The hosted fallback keeps the control plane's existing behavior and goes with hosted mode.
+        """
+        if self.code_execution_workspace_default is not None:
+            return self.code_execution_workspace_default
+        return not self.is_hosted_mode
 
     def effective_sandbox_image(self) -> str | None:
         """The image this deployment asks a sandbox session for, or ``None``.

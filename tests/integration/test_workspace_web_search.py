@@ -61,8 +61,10 @@ async def _workspace(db: AsyncSession, organization: Organization, *, name: str,
     return workspace
 
 
-def _service(db: AsyncSession, *, web_search_configured: bool = True) -> WorkspaceWebSearchService:
-    return WorkspaceWebSearchService(db, web_search_configured=web_search_configured)
+def _service(
+    db: AsyncSession, *, web_search_configured: bool = True, default_enabled: bool = True
+) -> WorkspaceWebSearchService:
+    return WorkspaceWebSearchService(db, web_search_configured=web_search_configured, default_enabled=default_enabled)
 
 
 async def test_a_workspace_with_no_row_reads_as_unconfigured_and_narrows_nothing(

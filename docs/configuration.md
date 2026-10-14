@@ -924,9 +924,29 @@ and guardrail configuration. Common startup settings are:
 - `web_search_allow_private_hosts`
 - `provider_allow_private_hosts`
 - `provider_endpoints_enabled` (see [Provider endpoints](provider-endpoints.md))
+- `web_search_workspace_default` and `code_execution_workspace_default`
+  (below)
 
 See [Built-in tools](tools.md), [MCP](mcp.md), and
 [Guardrails](guardrails.md) for behavior and security boundaries.
+
+### What a workspace with no tool policy gets
+
+A deployment that serves several tenants from one search key or one sandbox can
+make web access and code execution something each workspace turns on, rather than
+something each workspace may turn off:
+
+```yaml
+web_search_workspace_default: false      # OTARI_WEB_SEARCH_WORKSPACE_DEFAULT
+code_execution_workspace_default: false  # OTARI_CODE_EXECUTION_WORKSPACE_DEFAULT
+```
+
+Each decides only for a workspace with no stored policy: `false` refuses the
+tool there as a stored disabled policy would, and a workspace owner or admin
+turns it on from the Tools pages or the workspace policy API. A stored policy
+always wins. Unset, the tools are on, except on a hosted deployment, where they
+are off. See [Built-in tools](tools.md#per-workspace-web-access-policy) for what
+each policy covers.
 
 ## Documentation links
 

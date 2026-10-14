@@ -219,7 +219,9 @@ async def test_resolve_misconfigured_platform_500() -> None:
 @pytest.mark.asyncio
 async def test_a_local_scope_without_a_workspace_is_a_resolution_failure() -> None:
     with pytest.raises(WebSearchPolicyResolutionFailedError) as ei:
-        await LocalWebSearchPolicy(MagicMock(), search_keys=MagicMock()).resolve(_scope(), [WebTool.SEARCH])
+        await LocalWebSearchPolicy(MagicMock(), search_keys=MagicMock(), on_without_policy=True).resolve(
+            _scope(), [WebTool.SEARCH]
+        )
 
     assert ei.value.reason is WebSearchPolicyResolutionFailure.NO_WORKSPACE
 
@@ -236,12 +238,16 @@ class _SearchKeys:
         return self.credential
 
 
-def _local(search_keys: _SearchKeys, monkeypatch: pytest.MonkeyPatch) -> LocalWebSearchPolicy:
+def _local(
+    search_keys: _SearchKeys, monkeypatch: pytest.MonkeyPatch, *, on_without_policy: bool = True
+) -> LocalWebSearchPolicy:
     async def no_stored_policy(_session: Any, _workspace_id: uuid.UUID) -> None:
         return None
 
     monkeypatch.setattr(web_search_policy_adapter, "resolve_workspace_web_search_config", no_stored_policy)
-    return LocalWebSearchPolicy(MagicMock(), search_keys=cast(WorkspaceSearchKeys, search_keys))
+    return LocalWebSearchPolicy(
+        MagicMock(), search_keys=cast(WorkspaceSearchKeys, search_keys), on_without_policy=on_without_policy
+    )
 
 
 @pytest.mark.asyncio
@@ -278,4 +284,23 @@ async def test_a_fetch_alone_never_reads_a_key(monkeypatch: pytest.MonkeyPatch) 
         WebSearchPolicyScope(workspace_id=uuid.uuid4(), user_token=None), [WebTool.FETCH]
     )
 
+    assert search_keys.asked == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [[WebTool.SEARCH], [WebTool.FETCH]], ids=["search", "fetch"])
+async def test_no_row_where_the_deployment_makes_web_access_opt_in_is_a_disabled_policy(
+    monkeypatch: pytest.MonkeyPatch, tools: list[WebTool]
+) -> None:
+    search_keys = _SearchKeys(
+        WebSearchCredential(provider="brave", source=WebToolCredentialSource.ORG, api_key="brv-own")
+    )
+
+    policy = await _local(search_keys, monkeypatch, on_without_policy=False).resolve(
+        WebSearchPolicyScope(workspace_id=uuid.uuid4(), user_token=None), tools
+    )
+
+    assert policy is not None
+    assert policy.enabled is False
+    assert policy.credential is None
     assert search_keys.asked == []

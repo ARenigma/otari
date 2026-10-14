@@ -16194,6 +16194,8 @@ export interface components {
             configured: boolean;
             /** Created At */
             created_at: string | null;
+            /** Default Enabled */
+            default_enabled: boolean;
             /** Default Purpose Hint */
             default_purpose_hint: string | null;
             /** Enabled */
@@ -16593,6 +16595,8 @@ export interface components {
             configured: boolean;
             /** Created At */
             created_at: string | null;
+            /** Default Enabled */
+            default_enabled: boolean;
             /** Enabled */
             enabled: boolean;
             /** Max Results */

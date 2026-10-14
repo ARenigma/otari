@@ -245,7 +245,11 @@ class LocalToolOffer:
 
     def code_execution(self, workspace_enabled: bool | None) -> ToolAvailability:
         """The same question the request path asks, so the menu cannot hide a tool a request may use."""
-        return _tool_availability(self._config.sandbox_configured(), workspace_enabled)
+        return _tool_availability(
+            self._config.sandbox_configured(),
+            workspace_enabled,
+            on_without_policy=self._config.code_execution_on_without_policy(),
+        )
 
     def files(self) -> ToolAvailability:
         """Uploads, unless the deployment turned them off."""
@@ -264,14 +268,11 @@ class ForwardedToolOffer:
         """Code execution, read the way the platform reads it.
 
         The platform's sandbox behind the data plane runs the code, so this
-        process's own sandbox config says nothing. And there a workspace turns
-        code execution on, so no row means off rather than "no narrowing".
+        process's own sandbox config says nothing.
         """
-        if workspace_enabled is None:
-            return ToolAvailability(configured=True, enabled=False, reason=_WORKSPACE_NOT_ENABLED)
-        if workspace_enabled is False:
-            return ToolAvailability(configured=True, enabled=False, reason=_WORKSPACE_DISABLED)
-        return ToolAvailability(configured=True, enabled=True)
+        return _tool_availability(
+            True, workspace_enabled, on_without_policy=self._config.code_execution_on_without_policy()
+        )
 
     def files(self) -> ToolAvailability:
         """No uploads: the data plane resolves a ``file_id`` against its own store, and would not find one stored here.
@@ -321,7 +322,9 @@ async def resolve_tool_availability(
     )
 
     return PlaygroundToolAvailability(
-        web_search=_tool_availability(config.web_search_configured(), web_search_row),
+        web_search=_tool_availability(
+            config.web_search_configured(), web_search_row, on_without_policy=config.web_search_on_without_policy()
+        ),
         code_execution=offer.code_execution(code_execution_row),
         files=offer.files(),
         mcp_servers=[
@@ -336,15 +339,18 @@ async def resolve_tool_availability(
     )
 
 
-def _tool_availability(configured: bool, workspace_enabled: bool | None) -> ToolAvailability:
+def _tool_availability(
+    configured: bool, workspace_enabled: bool | None, *, on_without_policy: bool
+) -> ToolAvailability:
     """Compose the deployment's answer with the workspace's narrowing of it.
 
-    ``None`` for the workspace means no row, which means no narrowing: that is
-    what keeps a deployment that configured nothing per workspace behaving as it
-    did (#655/#678), and it must not read as "off".
+    ``None`` for the workspace means no row, which the deployment's
+    ``on_without_policy`` decides, as it does on the request path.
     """
     if not configured:
         return ToolAvailability(configured=False, enabled=False, reason=_NOT_CONFIGURED)
+    if workspace_enabled is None and not on_without_policy:
+        return ToolAvailability(configured=True, enabled=False, reason=_WORKSPACE_NOT_ENABLED)
     if workspace_enabled is False:
         return ToolAvailability(configured=True, enabled=False, reason=_WORKSPACE_DISABLED)
     return ToolAvailability(configured=True, enabled=True)

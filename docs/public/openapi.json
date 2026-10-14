@@ -21570,6 +21570,10 @@
             ],
             "title": "Created At"
           },
+          "default_enabled": {
+            "title": "Default Enabled",
+            "type": "boolean"
+          },
           "default_purpose_hint": {
             "anyOf": [
               {
@@ -21667,6 +21671,7 @@
           "workspace_id",
           "configured",
           "sandbox_configured",
+          "default_enabled",
           "allowed_images",
           "available_tools",
           "enabled",
@@ -22577,6 +22582,10 @@
             ],
             "title": "Created At"
           },
+          "default_enabled": {
+            "title": "Default Enabled",
+            "type": "boolean"
+          },
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
@@ -22640,6 +22649,7 @@
           "workspace_id",
           "configured",
           "web_search_configured",
+          "default_enabled",
           "enabled",
           "max_results",
           "purpose_hint",

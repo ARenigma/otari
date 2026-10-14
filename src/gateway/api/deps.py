@@ -91,6 +91,7 @@ from gateway.services.tenancy.organization_guardrail_definition_service import (
 from gateway.services.tenancy.provisioning_service import ensure_bootstrap_identity
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener, WorkspaceListener
 from gateway.services.tenancy.workspace_service import WorkspaceService
+from gateway.services.tenancy.workspace_web_search_service import WorkspaceWebSearchService
 from gateway.services.tools import (
     CodeExecutionWorkspaceDefaults,
     WebSearchKeyService,
@@ -925,8 +926,9 @@ def get_workspace_code_execution_policy_service(
     """Build the workspace code execution policy service on the request's Unit of Work.
 
     ``sandbox_configured`` is the check ``GET /api/v1/tools`` makes before it advertises code
-    execution, so the page and discovery agree. ``allowed_images`` is the operator's curated list.
-    Both are properties of the running gateway, handed in rather than read by the service.
+    execution, so the page and discovery agree. ``default_enabled`` is what the request path gives a
+    workspace with no policy. ``allowed_images`` is the operator's curated list. All are properties
+    of the running gateway, handed in rather than read by the service.
     """
     return WorkspaceCodeExecutionPolicyService(
         uow,
@@ -935,6 +937,7 @@ def get_workspace_code_execution_policy_service(
             db, OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
         ),
         sandbox_configured=config.sandbox_configured(),
+        default_enabled=config.code_execution_on_without_policy(),
         allowed_images=config.pinnable_sandbox_images(),
     )
 
@@ -942,6 +945,27 @@ def get_workspace_code_execution_policy_service(
 WorkspaceCodeExecutionPolicyServiceDep = Annotated[
     WorkspaceCodeExecutionPolicyService, Depends(get_workspace_code_execution_policy_service)
 ]
+
+
+def get_workspace_web_search_service(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    config: Annotated[GatewayConfig, Depends(get_config)],
+) -> WorkspaceWebSearchService:
+    """Build the service on the request's session.
+
+    The backend-presence check is the same one ``prepare_gateway_tools`` makes
+    when it decides whether a request may declare ``otari_web_search``, and the
+    default is the one the request path applies to a workspace with no row, so
+    the page and the request path agree.
+    """
+    return WorkspaceWebSearchService(
+        db,
+        web_search_configured=config.web_search_configured(),
+        default_enabled=config.web_search_on_without_policy(),
+    )
+
+
+WorkspaceWebSearchServiceDep = Annotated[WorkspaceWebSearchService, Depends(get_workspace_web_search_service)]
 
 
 def get_workspace_code_execution_policies(

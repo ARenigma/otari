@@ -62,3 +62,21 @@ def test_a_forwarded_offer_refuses_uploads_its_data_plane_could_not_read() -> No
     files = ForwardedToolOffer(_hosted()).files()
 
     assert (files.configured, files.enabled) == (False, False)
+
+
+def test_a_local_offer_reads_no_policy_as_off_where_the_deployment_makes_code_execution_opt_in() -> None:
+    config = GatewayConfig(sandbox_url="http://127.0.0.1:9999/sandbox", code_execution_workspace_default=False)
+
+    availability = LocalToolOffer(config).code_execution(None)
+
+    assert (availability.configured, availability.enabled, availability.reason) == (
+        True,
+        False,
+        "Not turned on for this workspace.",
+    )
+
+
+def test_a_forwarded_offer_honors_a_deployment_that_turns_code_execution_on_without_a_policy() -> None:
+    config = GatewayConfig(mode="hosted", code_execution_workspace_default=True)
+
+    assert ForwardedToolOffer(config).code_execution(None).enabled is True
