@@ -3,7 +3,10 @@ import { StrictMode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useAuth } from "@/features/auth/AuthContext"
-import { OAuthCallbackPage } from "@/features/auth/OAuthCallbackPage"
+import {
+  OAuthCallbackPage,
+  rememberOAuthState,
+} from "@/features/auth/OAuthCallbackPage"
 import { API_ROOT } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
@@ -130,6 +133,29 @@ describe("OAuthCallbackPage", () => {
 
     await screen.findByText("SIGNED IN")
     expect(window.location.hash).toBe("#/organization/billing")
+    expect(window.sessionStorage.getItem(RETURN_KEY)).toBeNull()
+  })
+
+  it("still starts a sign-in when the page to return to cannot be stored", () => {
+    // The state is what the sign-in needs; the page is a convenience, and a
+    // failure to store it must neither throw nor leave an older one behind.
+    window.sessionStorage.setItem(RETURN_KEY, "#/from-an-earlier-attempt")
+    const setItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key === RETURN_KEY) {
+        throw new DOMException("Storage is full.", "QuotaExceededError")
+      }
+      setItem.call(this, key, value)
+    })
+
+    expect(() =>
+      rememberOAuthState("the-state", "#/organization/billing"),
+    ).not.toThrow()
+    expect(window.sessionStorage.getItem(STATE_KEY)).toBe("the-state")
     expect(window.sessionStorage.getItem(RETURN_KEY)).toBeNull()
   })
 

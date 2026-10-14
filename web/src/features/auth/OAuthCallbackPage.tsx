@@ -42,7 +42,12 @@ const RETURN_KEY = "otari.oauth.return"
  */
 export function rememberOAuthState(state: string, returnHash: string): void {
   window.sessionStorage.setItem(STATE_KEY, state)
-  window.sessionStorage.setItem(RETURN_KEY, returnHash)
+  window.sessionStorage.removeItem(RETURN_KEY)
+  try {
+    window.sessionStorage.setItem(RETURN_KEY, returnHash)
+  } catch {
+    // Storage full: the sign-in still starts, and lands on the home page.
+  }
 }
 
 /** Take the remembered state, clearing it so one value answers one callback. */
