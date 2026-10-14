@@ -1908,6 +1908,9 @@ export interface paths {
          *     The caller is **not** moved into it. Switching is a separate call
          *     (``POST /me/switch``), so creating an organization does not change what the
          *     rest of the caller's session is looking at.
+         *
+         *     Where signup is closed, the caller must already be an active member of an
+         *     organization; a caller with none is refused with a 403.
          */
         post: operations["organizations-create_organization"];
         delete?: never;
@@ -12086,6 +12089,17 @@ export interface components {
             updated_at?: string | null;
         };
         /**
+         * OrganizationRefusal
+         * @description The body of a request the organizations domain refuses.
+         */
+        OrganizationRefusal: {
+            /**
+             * Detail
+             * @description Why the request was refused.
+             */
+            detail: string;
+        };
+        /**
          * OrganizationScopedBudgetCreate
          * @description Attach one of the organization's budgets to a scope inside it.
          */
@@ -19655,6 +19669,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrganizationPublic"];
+                };
+            };
+            /** @description Signup is closed and the caller is not an active member of any organization. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationRefusal"];
                 };
             };
             /** @description Validation Error */
