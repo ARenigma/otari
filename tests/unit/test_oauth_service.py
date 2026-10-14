@@ -4,8 +4,8 @@ Covers what this deployment owns, which is what ``services/oauth_service.py``
 kept when the protocol mechanics moved onto apron-auth: which providers are
 configured, which scopes are asked for, where the provider is told to send the
 browser back to, the PKCE and ``state`` binding the flow rests on, and the
-carry-over that must survive the port (a tri-state ``email_verified`` collapses
-on the unverified side).
+carry-over that must survive the port (the subject, and the tri-state
+``email_verified`` claim as an ``EmailAssertion``).
 
 The live exchange itself is not here and cannot be: a green suite that stubs
 apron-auth proves wiring and never that the request shape it sends is one a
@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.config import OAUTH_PROVIDERS, GatewayConfig
 from gateway.exceptions.identity_exceptions import OAuthExchangeError, OAuthNotConfiguredError, OAuthStateError
 from gateway.log_config import logger as gateway_logger
+from gateway.models.identity import EmailAssertion
 from gateway.services import oauth_service
 
 
@@ -549,6 +550,7 @@ class TestExchange:
     @staticmethod
     def _profile(**overrides: Any) -> SimpleNamespace:
         fields: dict[str, Any] = {
+            "subject": "subject-1",
             "email": "member@example.com",
             "name": "A Member",
             "email_verified": True,
@@ -564,33 +566,42 @@ class TestExchange:
         )
 
         assert identity.provider == "google"
+        assert identity.subject == "subject-1"
         assert identity.email == "member@example.com"
         assert identity.full_name == "A Member"
-        assert identity.email_verified is True
+        assert identity.email_verified is EmailAssertion.VERIFIED
 
     @pytest.mark.asyncio
-    async def test_an_unasserted_email_verified_collapses_to_unverified(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # apron-auth reports email_verified as tri-state. This edition resolves
-        # on a bool, and silence is not an assertion: it must not be laundered
-        # into a verified identity. otari-ai#1551 moves resolution onto the
-        # tri-state model, once, on the platform.
+    async def test_an_unasserted_email_verified_stays_unasserted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._stub_client(monkeypatch, self._profile(email_verified=None))
 
         identity = await oauth_service.exchange_code(
             configured(), "google", code="c", state="s", flow_secret=FLOW_SECRET, db=fake_db()
         )
 
-        assert identity.email_verified is False
+        assert identity.email_verified is EmailAssertion.UNASSERTED
 
     @pytest.mark.asyncio
-    async def test_an_explicit_false_is_unverified_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize("subject", [None, "", "s" * 256])
+    async def test_an_identity_with_no_usable_subject_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, subject: str | None
+    ) -> None:
+        self._stub_client(monkeypatch, self._profile(subject=subject))
+
+        with pytest.raises(OAuthExchangeError):
+            await oauth_service.exchange_code(
+                configured(), "google", code="c", state="s", flow_secret=FLOW_SECRET, db=fake_db()
+            )
+
+    @pytest.mark.asyncio
+    async def test_an_explicit_false_is_unverified(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._stub_client(monkeypatch, self._profile(email_verified=False))
 
         identity = await oauth_service.exchange_code(
             configured(), "google", code="c", state="s", flow_secret=FLOW_SECRET, db=fake_db()
         )
 
-        assert identity.email_verified is False
+        assert identity.email_verified is EmailAssertion.UNVERIFIED
 
     @pytest.mark.asyncio
     async def test_a_failed_exchange_does_not_carry_the_providers_words_to_the_caller(
@@ -663,3 +674,8 @@ class TestProviderLabel:
         # The only caller is a refusal, and one that fails to render is worse
         # than one naming a provider nobody configured.
         assert oauth_service.provider_label("acme-oidc") == "acme-oidc"
+
+
+@pytest.mark.parametrize(("provider", "trusted"), [("github", True), ("google", True), ("acme-oidc", False)])
+def test_only_a_known_provider_has_a_trusted_email_claim(provider: str, trusted: bool) -> None:
+    assert oauth_service.trusts_email_claim(provider) is trusted

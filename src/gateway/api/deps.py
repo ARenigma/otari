@@ -38,12 +38,15 @@ from gateway.ports.web_search_policy_port import WebSearchPolicyPort
 from gateway.repositories.api_keys import ApiKeyRepository
 from gateway.repositories.budgets import BudgetRepositories
 from gateway.repositories.files import FileRepositories
+from gateway.repositories.identity import IdentityRepositories
 from gateway.repositories.inference import InferenceRepositories
 from gateway.repositories.overview.overview_repository import OverviewRepository
 from gateway.repositories.providers import OrgProviderKeyModelRepository, ProviderEndpointRepository
 from gateway.repositories.rate_limits import RateLimitRuleRepository
 from gateway.repositories.tenancy import (
+    OrganizationDomainRepository,
     OrganizationGuardrailDefinitionRepository,
+    OrganizationMemberRepository,
     OrgProviderKeyRepository,
     WorkspaceRepository,
 )
@@ -60,6 +63,7 @@ from gateway.services.code_execution import SandboxContainerRegistry
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, resolve_dashboard_session
 from gateway.services.feedback import FeedbackService
 from gateway.services.files import FileBackends, FileService, SandboxFileBridge, StagedFile
+from gateway.services.identity import IdentityService
 from gateway.services.inference import InferenceService
 from gateway.services.log_writer import LogWriter
 from gateway.services.mail import Mailer
@@ -71,7 +75,12 @@ from gateway.services.playground_service import ForwardedToolOffer, LocalToolOff
 from gateway.services.providers import OrgProviderModelService, ProviderEndpointService, refresh_provider_endpoint_cache
 from gateway.services.rate_limits import RateLimitService
 from gateway.services.routing import clear_router_backend_cache
-from gateway.services.tenancy import InvitationClaimSettings, OrganizationService, organization_guardrail_runner
+from gateway.services.tenancy import (
+    DomainAutoJoinListener,
+    InvitationClaimSettings,
+    OrganizationService,
+    organization_guardrail_runner,
+)
 from gateway.services.tenancy.authorization import WorkspaceAccess, resolve_visible_workspace_scope
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.membership_listener import MembershipListener
@@ -1101,16 +1110,8 @@ def get_growth_signal_port(
     return container.resolve(GrowthSignalPort, db)
 
 
-# ``get_db`` rather than ``PortSessionDep``, for the reason
-# ``get_telemetry_storage_port`` below gives: the only surface resolving this is
-# the OAuth sign-in route, which is standalone-only and already holds a session
-# from ``get_db``, and FastAPI caches a dependency per callable. Naming the same
-# one hands the adapter the caller's session instead of opening a second,
-# independent one against the same database for the same request. That sharing
-# is load-bearing here and not just tidy: the adapter writes (it links a
-# provider, and may stamp a verification) and deliberately does not commit, so
-# its writes have to be in the transaction the route commits or they are in one
-# nobody does.
+# ``get_db`` rather than ``PortSessionDep``: the adapter writes and does not commit,
+# so it must share the session of the Unit of Work whose block commits its writes.
 def get_identity_provider_port(
     db: Annotated[AsyncSession, Depends(get_db)],
     uow: UnitOfWorkDep,
@@ -1283,6 +1284,26 @@ GrowthSignalPortDep = Annotated[GrowthSignalPort, Depends(get_growth_signal_port
 IdentityProviderPortDep = Annotated[IdentityProviderPort, Depends(get_identity_provider_port)]
 McpServerPortDep = Annotated[McpServerPort, Depends(get_mcp_server_port)]
 ModelProviderPortDep = Annotated[ModelProviderPort, Depends(get_model_provider_port)]
+
+
+def get_identity_service(
+    uow: UnitOfWorkDep,
+    config: Annotated[GatewayConfig, Depends(get_config)],
+    identity_provider: IdentityProviderPortDep,
+    organizations: OrganizationServiceDep,
+) -> IdentityService:
+    """Build the identity service on the request's Unit of Work."""
+    return IdentityService(
+        uow,
+        IdentityRepositories.on(uow),
+        identity_provider=identity_provider,
+        organizations=organizations,
+        sign_in_listener=DomainAutoJoinListener(OrganizationDomainRepository(uow), OrganizationMemberRepository(uow)),
+        session_ttl_hours=config.dashboard_session_ttl_hours,
+    )
+
+
+IdentityServiceDep = Annotated[IdentityService, Depends(get_identity_service)]
 
 
 def get_org_provider_model_service(
@@ -1565,6 +1586,7 @@ __all__ = [
     "OverviewServiceDep",
     "GrowthSignalPortDep",
     "IdentityProviderPortDep",
+    "IdentityServiceDep",
     "McpServerPortDep",
     "ModelProviderPortDep",
     "OrgProviderModelServiceDep",

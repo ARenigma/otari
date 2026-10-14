@@ -26,13 +26,12 @@ it is deleted.
 """
 
 import hashlib
-import secrets
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import Request, Response
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,7 +45,6 @@ from gateway.models.tenancy import DashboardSession, User
 from gateway.services.master_key_service import hash_master_key
 
 SESSION_COOKIE_NAME = "otari_dashboard_session"
-_SESSION_TOKEN_PREFIX = "otari-sess-"
 # Stored in runtime_settings; ignored by runtime_settings_service (not a
 # SETTABLE_KEY). Hash of the master key that existing sessions were minted
 # under, so a key change across a restart revokes them (see
@@ -62,48 +60,6 @@ def hash_session_token(token: str) -> str:
 def _as_utc(value: datetime) -> datetime:
     """Treat a naive stored datetime as the UTC it was written as (SQLite)."""
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-async def create_dashboard_session(db: AsyncSession, ttl_hours: int, *, user_id: uuid.UUID) -> tuple[str, datetime]:
-    """Stage a new session row for ``user_id`` and return ``(token, expires_at)``.
-
-    ``user_id`` names the tenancy identity the session speaks for, and is
-    required rather than defaulted: a session that names nobody cannot resolve a
-    caller, which is the reason the column exists.
-
-    ``user.last_sign_in_at`` is stamped here rather than at the four sign-in
-    routes that call this, so a fifth cannot forget to. The one call that is not
-    a sign-in in the ordinary sense is the re-mint after a master-key rotation
-    (``routes/settings.py``), and it is stamped too: the operator proved the new
-    key to get the new session, which is the event the column records.
-
-    Expired rows are pruned opportunistically here, so the table stays small
-    without a background task. The caller owns the transaction and must commit
-    before handing the token to the browser.
-    """
-    now = datetime.now(UTC)
-    await db.execute(delete(DashboardSession).where(DashboardSession.expires_at < now))
-    # Only ever forward. Two sign-ins for one identity each compute their own
-    # ``now``, so without the second predicate the one that commits last wins
-    # rather than the one that is later, and a column presented as "last signed
-    # in" would step backwards.
-    await db.execute(
-        update(User)
-        .where(col(User.id) == user_id)
-        .where(or_(col(User.last_sign_in_at).is_(None), col(User.last_sign_in_at) < now))
-        .values(last_sign_in_at=now)
-    )
-    token = f"{_SESSION_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
-    expires_at = now + timedelta(hours=ttl_hours)
-    db.add(
-        DashboardSession(
-            token_hash=hash_session_token(token),
-            user_id=user_id,
-            created_at=now,
-            expires_at=expires_at,
-        )
-    )
-    return token, expires_at
 
 
 async def resolve_dashboard_session(db: AsyncSession, token: str) -> User | None:

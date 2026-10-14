@@ -49,6 +49,7 @@ from gateway.exceptions.organizations_exceptions import (
 )
 from gateway.models.api_keys import APIKey
 from gateway.models.budgets import SCOPE_WORKSPACE, SCOPE_WORKSPACE_MEMBER, ScopedBudget, ScopeType
+from gateway.models.identity import EmailAssertion, ProviderIdentity
 from gateway.models.tenancy import (
     ActiveOrganizationMemberCreateRequest,
     ActiveOrganizationMemberUpdateRequest,  # noqa: E402
@@ -1198,10 +1199,13 @@ async def test_concurrent_first_oauth_sign_ins_of_one_address_share_one_identity
             functools.partial(user_service.forget_unproven_access, session),
             open_signup=True,
         ).resolve(
-            provider="google",
-            email="nova@example.com",
-            full_name=None,
-            email_verified=True,
+            ProviderIdentity(
+                provider="google",
+                subject="nova-subject",
+                email="nova@example.com",
+                full_name=None,
+                email_verified=EmailAssertion.VERIFIED,
+            )
         )
         await session.commit()
         return resolution.identity.id
@@ -1283,7 +1287,15 @@ async def test_concurrent_oauth_claims_of_an_unwanted_identity_found_one_organiz
             OrganizationService(session, **membership_writes(session)),
             functools.partial(user_service.forget_unproven_access, session),
             open_signup=True,
-        ).resolve(provider="google", email="nova@example.com", full_name=None, email_verified=True)
+        ).resolve(
+            ProviderIdentity(
+                provider="google",
+                subject="nova-subject",
+                email="nova@example.com",
+                full_name=None,
+                email_verified=EmailAssertion.VERIFIED,
+            )
+        )
         await session.commit()
         return resolution.identity.id
 

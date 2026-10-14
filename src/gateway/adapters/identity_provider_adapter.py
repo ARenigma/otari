@@ -9,9 +9,10 @@ from gateway.exceptions.identity_exceptions import (
     OAuthEmailNotVerifiedError,
     OAuthIdentityUnknownError,
 )
+from gateway.models.identity import EmailAssertion, ProviderIdentity
 from gateway.ports.identity_provider_port import IdentityProviderPort, IdentityResolution
 from gateway.repositories.tenancy import UserRepository
-from gateway.services.oauth_service import provider_label
+from gateway.services.oauth_service import provider_label, trusts_email_claim
 from gateway.services.tenancy import OrganizationService, unverified_identity_is_claimable
 from gateway.services.tenancy.email_address import validated_email
 
@@ -19,9 +20,7 @@ from gateway.services.tenancy.email_address import validated_email
 class DeploymentIdentityProviderAdapter(IdentityProviderPort):
     """Applies this deployment's ``open_signup`` setting to an OAuth sign-in.
 
-    The adapter leaves its changes to the account for the caller to commit. The one exception is the
-    organization and workspace a new or reclaimed account gets, which ``OrganizationService`` commits in
-    its own Unit of Work block before the account itself is changed.
+    The adapter leaves its changes for the caller's Unit of Work block to commit.
     """
 
     def __init__(
@@ -38,24 +37,18 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
         self._forget_unproven_access = forget_unproven_access
         self._open_signup = open_signup
 
-    async def resolve(
-        self,
-        *,
-        provider: str,
-        email: str | None,
-        full_name: str | None,
-        email_verified: bool,
-    ) -> IdentityResolution:
-        """Return the account for this OAuth sign-in.
+    async def resolve(self, external: ProviderIdentity) -> IdentityResolution:
+        """Return the account that holds the address of an OAuth identity with no link.
 
+        Only a provider whose email claim no tenant can set signs in here.
         The provider must have verified the email address.
         If the provider sent no address, or did not verify it, the sign-in is refused and no account is created.
 
-        If ``open_signup`` is enabled and there is no existing account for the address, a new account is created
-        and committed. The new account has its own organization and workspace.
+        If ``open_signup`` is enabled and there is no existing account for the address, a new account is created.
+        The new account has its own organization and workspace.
         No verification email is sent, because the provider has already verified the address.
 
-        A successful call then stages these changes on the account and commits none of them:
+        A successful call then stages these changes on the account:
 
         - It records ``provider`` if the account names none.
           An account that already names a provider keeps it.
@@ -74,31 +67,35 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
 
         Under ``open_signup``, claiming an unverified account that no organization still wants (its
         invitation revoked, declined or lapsed, or the member removed) gives it an organization and
-        workspace of its own and points it at them, the way a new account is created. That tenancy is
-        committed first, and the account is read again under a lock before this sign-in changes it.
+        workspace of its own and points it at them, the way a new account is created. The account is then
+        read again under a lock before this sign-in changes it.
 
         ``new_account`` is true when this sign-in created the account, or is the first way in to one an
         organization added and nobody had claimed.
 
         Raises:
             OAuthEmailNotVerifiedError: If the provider returned no address, or one it did not verify.
-            OAuthIdentityUnknownError: If no active account holds the address,
-                and ``open_signup`` does not register a new one.
+            OAuthIdentityUnknownError: If a tenant can set the provider's email claim,
+                or no active account holds the address and ``open_signup`` does not register a new one.
 
         """
-        label = provider_label(provider)
-        if not email_verified or not email:
+        label = provider_label(external.provider)
+        if not trusts_email_claim(external.provider):
+            raise OAuthIdentityUnknownError(label)
+        if external.email_verified is not EmailAssertion.VERIFIED or not external.email:
             raise OAuthEmailNotVerifiedError(label)
         # An address this gateway would never store names no account, so it is refused as unknown.
         try:
-            address = validated_email(email)
+            address = validated_email(external.email)
         except InvalidEmailError as error:
             raise OAuthIdentityUnknownError(label) from error
 
         created = False
         identity = await self._users.get_by_email(address)
         if identity is None and self._open_signup:
-            registration = await self._organizations.provision_signup_tenancy(email=address, full_name=full_name)
+            registration = await self._organizations.provision_signup_tenancy(
+                email=address, full_name=external.full_name
+            )
             identity = registration.identity
             created = registration.created
         if identity is None:
@@ -118,13 +115,13 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
 
         first_claim = identity.hashed_password is None and identity.email_verified_at is None
         if not created and self._open_signup and identity.email_verified_at is None:
-            await self._organizations.provision_tenancy_for_claim(identity, full_name=full_name)
-            # That block committed, which released the lock taken above.
+            await self._organizations.provision_tenancy_for_claim(identity, full_name=external.full_name)
+            # Provisioning pointed the account at its new organization, so it is read again.
             identity = await self._users.get_locked(identity.id)
             if identity is None or not identity.is_active:
                 raise OAuthIdentityUnknownError(label)
         if identity.oauth_provider is None:
-            identity.oauth_provider = provider
+            identity.oauth_provider = external.provider
         if identity.email_verified_at is None or identity.email_vouched_at is not None:
             identity.email_verified_at = datetime.now(UTC)
             identity.email_vouched_at = None
@@ -135,8 +132,8 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
             identity.password_reset_token_hash = None
             identity.password_reset_token_expires_at = None
             await self._forget_unproven_access(identity.id)
-        if not identity.full_name and full_name:
-            identity.full_name = full_name
+        if not identity.full_name and external.full_name:
+            identity.full_name = external.full_name
         self._users.stage(identity)
         return IdentityResolution(identity=identity, new_account=created or first_claim)
 
