@@ -17,6 +17,7 @@ vi.mock("@/shared/telemetry/overlayTelemetry", async () => {
 })
 
 const STATE_KEY = "otari.oauth.state"
+const RETURN_KEY = "otari.oauth.return"
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -113,6 +114,74 @@ describe("OAuthCallbackPage", () => {
 
     await screen.findByText("SIGNED IN")
     expect(window.sessionStorage.getItem(STATE_KEY)).toBeNull()
+  })
+
+  it("returns to the page the sign-in started from", async () => {
+    // An emailed link to a page behind the sign-in screen, followed signed out:
+    // the sign-in screen stood in for that page, and the provider's round trip
+    // must not lose it.
+    window.sessionStorage.setItem(STATE_KEY, "the-state")
+    window.sessionStorage.setItem(RETURN_KEY, "#/organization/billing")
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ expires_at: "2026-09-01T00:00:00Z" }),
+    )
+
+    renderCallback("#/auth/google/callback?code=the-code&state=the-state")
+
+    await screen.findByText("SIGNED IN")
+    expect(window.location.hash).toBe("#/organization/billing")
+    expect(window.sessionStorage.getItem(RETURN_KEY)).toBeNull()
+  })
+
+  it.each([
+    ["nothing was remembered", undefined],
+    ["the page renders ahead of the router", "#/verify-email?token=t"],
+    ["the value is not a hash path", "https://evil.example/#/keys"],
+  ])("goes home when %s", async (_, remembered) => {
+    window.sessionStorage.setItem(STATE_KEY, "the-state")
+    if (remembered !== undefined) {
+      window.sessionStorage.setItem(RETURN_KEY, remembered)
+    }
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ expires_at: "2026-09-01T00:00:00Z" }),
+    )
+
+    renderCallback("#/auth/google/callback?code=the-code&state=the-state")
+
+    await screen.findByText("SIGNED IN")
+    expect(window.location.hash).toBe("#/")
+    expect(window.sessionStorage.getItem(RETURN_KEY)).toBeNull()
+  })
+
+  it.each([
+    [
+      "the provider declined",
+      "#/auth/google/callback?error=access_denied&state=the-state",
+      () => {},
+    ],
+    [
+      "the gateway refused the code",
+      "#/auth/google/callback?code=the-code&state=the-state",
+      () =>
+        vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValue(
+            jsonResponse({ detail: "Not registered here." }, 401),
+          ),
+    ],
+  ])("forgets the page to return to when %s", async (_, hash, stubFetch) => {
+    // A later sign-in in this tab starts from its own page, not this one's.
+    window.sessionStorage.setItem(STATE_KEY, "the-state")
+    window.sessionStorage.setItem(RETURN_KEY, "#/organization/billing")
+    stubFetch()
+
+    renderCallback(hash)
+
+    await screen.findByRole("heading", {
+      name: "That sign-in did not complete",
+    })
+    expect(window.sessionStorage.getItem(RETURN_KEY)).toBeNull()
+    expect(window.location.hash).toBe("")
   })
 
   it("refuses a state that does not match, without spending the code", async () => {

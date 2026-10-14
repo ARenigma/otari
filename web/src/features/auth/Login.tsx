@@ -580,7 +580,9 @@ export function Login() {
         setPendingProvider(undefined)
         return
       }
-      rememberOAuthState(started.state)
+      // The sign-in screen renders in place of whatever page was asked for,
+      // so this hash is the link the person followed.
+      rememberOAuthState(started.state, window.location.hash)
       window.location.assign(started.authorizationUrl)
     } catch (caught) {
       recordEvent(TELEMETRY_EVENTS.LOGIN_FAILED, {

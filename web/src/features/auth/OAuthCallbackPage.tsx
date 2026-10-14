@@ -15,6 +15,7 @@ import {
   PublicAuthLayout,
   PublicAuthLink,
 } from "./PublicAuthLayout"
+import { signInReturnHash } from "./publicAuthPaths"
 
 /**
  * Where the CSRF `state` waits while the browser is away at the provider.
@@ -28,9 +29,20 @@ import {
  */
 const STATE_KEY = "otari.oauth.state"
 
-/** Remember the state for the provider round trip about to start. */
-export function rememberOAuthState(state: string): void {
+/**
+ * The hash the tab was on when the round trip started, so a link into the
+ * dashboard that ended on the sign-in screen still opens once the provider
+ * sends the person back. Kept beside the state, and for the same reasons.
+ */
+const RETURN_KEY = "otari.oauth.return"
+
+/**
+ * Remember the state for the provider round trip about to start, and the hash
+ * to return to once it succeeds.
+ */
+export function rememberOAuthState(state: string, returnHash: string): void {
   window.sessionStorage.setItem(STATE_KEY, state)
+  window.sessionStorage.setItem(RETURN_KEY, returnHash)
 }
 
 /** Take the remembered state, clearing it so one value answers one callback. */
@@ -38,6 +50,16 @@ function takeOAuthState(): string | null {
   const stored = window.sessionStorage.getItem(STATE_KEY)
   window.sessionStorage.removeItem(STATE_KEY)
   return stored
+}
+
+/**
+ * Take the hash to return to, cleared with the state whatever the outcome, and
+ * checked on the way out: storage is not a source to navigate on unchecked.
+ */
+function takeOAuthReturn(): string {
+  const stored = window.sessionStorage.getItem(RETURN_KEY) ?? ""
+  window.sessionStorage.removeItem(RETURN_KEY)
+  return signInReturnHash(stored)
 }
 
 /**
@@ -98,6 +120,7 @@ export function OAuthCallbackPage({
     const label = oauthProviderLabel(provider)
     const params = new URLSearchParams(hash.split("?")[1] ?? "")
     const expectedState = takeOAuthState()
+    const returnHash = takeOAuthReturn()
     const providerError = params.get("error")
     const state = params.get("state")
     const code = params.get("code")
@@ -149,11 +172,9 @@ export function OAuthCallbackPage({
           // Signing in is not enough to stop this page rendering, and leaving
           // the hash alone strands the person here. `DeploymentRoot` matches a
           // public auth path *before* the auth gate, so an unchanged hash keeps
-          // re-selecting this page, whose effect has already run: the pending
-          // panel would sit there with no way out, and a reload would report a
-          // state mismatch because the stored state is spent. So this hands the
-          // tab back the way `AcceptInvitationPage` does when it is finished.
-          goToPublicAuthPage("#/")
+          // re-selecting this page, whose effect has already run. So this hands
+          // the tab on to the page the sign-in started from.
+          goToPublicAuthPage(returnHash)
           return
         }
         recordEvent(TELEMETRY_EVENTS.LOGIN_FAILED, {

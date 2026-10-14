@@ -8,6 +8,7 @@ import {
   PUBLIC_AUTH_PAGES,
   publicAuthPath,
   rendersAheadOfRouter,
+  signInReturnHash,
 } from "@/features/auth/publicAuthPaths"
 
 describe("isAcceptInvitationPath", () => {
@@ -22,6 +23,47 @@ describe("isAcceptInvitationPath", () => {
     expect(rendersAheadOfRouter("/accept-invitation")).toBe(true)
     expect(rendersAheadOfRouter("/signup")).toBe(true)
     expect(rendersAheadOfRouter("/usage")).toBe(false)
+  })
+})
+
+describe("signInReturnHash", () => {
+  it("keeps a page the router serves, query string and all", () => {
+    expect(signInReturnHash("#/organization/billing")).toBe(
+      "#/organization/billing",
+    )
+    expect(signInReturnHash("#/usage?range=7d")).toBe("#/usage?range=7d")
+    expect(signInReturnHash("#/models/z-ai/glm-5.3")).toBe(
+      "#/models/z-ai/glm-5.3",
+    )
+  })
+
+  it("sends a page rendered ahead of the router home instead", () => {
+    // Nothing on these is left to do for a session, and three of them carry a
+    // single-use token.
+    for (const hash of [
+      "#/signup",
+      "#/auth/google/callback?code=c&state=s",
+      "#/verify-email?token=t",
+      "#/reset-password?token=t",
+      "#/accept-invitation?token=t",
+    ]) {
+      expect(signInReturnHash(hash)).toBe("#/")
+    }
+  })
+
+  it("sends anything that is not a hash path in this app home", () => {
+    for (const value of [
+      "",
+      "#",
+      "#keys",
+      "/organization/billing",
+      "https://evil.example/#/keys",
+      "javascript:alert(1)",
+      "#//evil.example",
+      "#/\\evil.example",
+    ]) {
+      expect(signInReturnHash(value)).toBe("#/")
+    }
   })
 })
 

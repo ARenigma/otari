@@ -195,7 +195,8 @@ export function SignupPage({ hash }: { hash: string }) {
         setPendingProvider(undefined)
         return
       }
-      rememberOAuthState(started.state)
+      // Home, where `SignedInRoot` reopens a model chosen on the catalog.
+      rememberOAuthState(started.state, "#/")
       window.location.assign(started.authorizationUrl)
     } catch (caught) {
       recordEvent(TELEMETRY_EVENTS.SIGNUP_FAILED, {
