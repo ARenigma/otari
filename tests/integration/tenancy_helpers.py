@@ -5,7 +5,7 @@ start from whatever organization, workspace and membership shape it needs
 without first satisfying authorization rules it is not exercising.
 """
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +25,7 @@ from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetMembershipListener, BudgetService
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.membership_listener import MembershipListener
-from gateway.services.tenancy.organization_service import OrganizationService
+from gateway.services.tenancy.organization_service import InvitationClaimSettings, OrganizationService
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener, WorkspaceListener
 
 
@@ -45,6 +45,16 @@ def membership_writes(db: AsyncSession) -> MembershipWrites:
         "membership_listener": BudgetMembershipListener(BudgetRepositories.on(uow)),
         "workspace_listener": NullWorkspaceListener(),
     }
+
+
+# A deployment that publishes no terms, for an accept that does not exercise them.
+NO_TERMS = InvitationClaimSettings(terms_url=None)
+
+
+def claim_writes(db: AsyncSession) -> dict[str, Any]:
+    """Build the Unit of Work and the organization service a claim writes through, as the claim routes do."""
+    writes = membership_writes(db)
+    return {"uow": writes["uow"], "organizations": OrganizationService(db, **writes)}
 
 
 def budget_service(db: AsyncSession) -> BudgetService:

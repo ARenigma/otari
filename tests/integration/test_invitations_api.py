@@ -302,6 +302,30 @@ def test_a_shared_link_lets_the_invitee_set_a_password_and_sign_in_without_mail(
     assert row["full_name"] == "Grace Hopper"
 
 
+def test_a_first_password_from_a_link_requires_the_published_terms(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    test_config: GatewayConfig,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The link is held to the rule signup and a reset claim follow, so it is not a way around the terms."""
+    monkeypatch.setattr(test_config, "terms_url", "https://example.com/terms")
+    token = _token_from(_invite(client, master_key_header, email="tess@example.com")["accept_link"])
+
+    refused = client.post(f"{API_ROOT}/invitations/accept", json={"token": token, "password": PASSWORD})
+    assert refused.status_code == 400, refused.text
+    assert "terms" in refused.json()["detail"]
+    # Nothing was accepted, so the same link still works once the terms are.
+    accepted = client.post(
+        f"{API_ROOT}/invitations/accept", json={"token": token, "password": PASSWORD, "terms_accepted": True}
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    invitee = db_session.query(User).filter(col(User.email) == "tess@example.com").one()
+    assert invitee.terms_accepted_at is not None
+
+
 def test_accepting_without_a_password_still_works_and_sets_none(
     client: TestClient,
     master_key_header: dict[str, str],
@@ -312,8 +336,30 @@ def test_accepting_without_a_password_still_works_and_sets_none(
 
     assert accept.status_code == 200, accept.text
     assert accept.json()["password_set"] is False
+    assert accept.json()["verification_pending"] is False
     signed_in = client.post(f"{API_ROOT}/auth/session", json={"email": "hedy@example.com", "password": PASSWORD})
     assert signed_in.status_code == 401
+
+
+def test_accepting_after_an_unverified_signup_says_the_address_still_needs_verifying(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    test_config: GatewayConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accepting does not verify (whoever signed up may not hold the mailbox), so the page has to say so."""
+    result = _invite(client, master_key_header, email="hedy@example.com")
+    monkeypatch.setattr(test_config, "mail_transport", "console")
+    monkeypatch.setattr(test_config, "public_base_url", "https://otari.example.com")
+    signed_up = client.post(f"{API_ROOT}/auth/signup", json={"email": "hedy@example.com", "password": PASSWORD})
+    assert signed_up.status_code == 200, signed_up.text
+
+    accept = client.post(f"{API_ROOT}/invitations/accept", json={"token": _token_from(result["accept_link"])})
+
+    assert accept.status_code == 200, accept.text
+    assert accept.json()["verification_pending"] is True
+    signed_in = client.post(f"{API_ROOT}/auth/session", json={"email": "hedy@example.com", "password": PASSWORD})
+    assert signed_in.status_code == 403
 
 
 def test_a_forwarded_link_cannot_set_a_password_on_an_address_that_can_already_sign_in(
@@ -758,7 +804,12 @@ def test_accepting_from_the_inbox_activates_the_membership(
         headers=master_key_header,
     )
     assert response.status_code == 200, response.text
-    assert response.json() == {"organization_name": "Second", "role": "member", "password_set": False}
+    assert response.json() == {
+        "organization_name": "Second",
+        "role": "member",
+        "password_set": False,
+        "verification_pending": False,
+    }
 
     db_session.refresh(membership)
     db_session.refresh(invitation)

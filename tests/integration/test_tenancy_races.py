@@ -8,6 +8,7 @@ with separate sessions rather than asserting the branch in isolation.
 """
 
 import asyncio
+import functools
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -79,7 +80,11 @@ from gateway.schemas.budgets import (
 )
 from gateway.services.api_keys import ApiKeyService
 from gateway.services.budgets import BudgetService
-from gateway.services.password_service import verify_absent_password_async, verify_password_async
+from gateway.services.password_service import (
+    hash_password_async,
+    verify_absent_password_async,
+    verify_password_async,
+)
 from gateway.services.tenancy import OrganizationService, WorkspaceService, user_service
 from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.membership_listener import MembershipListener
@@ -96,7 +101,21 @@ from gateway.services.tenancy.workspace_activation_service import (
 )
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 
-from .tenancy_helpers import MembershipWrites, budget_service, create_budget, create_member, membership_writes
+from .tenancy_helpers import (
+    NO_TERMS,
+    MembershipWrites,
+    budget_service,
+    claim_writes,
+    create_budget,
+    create_member,
+    membership_writes,
+)
+
+
+def _reader(db: AsyncSession) -> OrganizationService:
+    """The read-only organization service ``get_organization_service`` builds."""
+    return OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener())
+
 
 pytestmark = pytest.mark.asyncio
 
@@ -948,7 +967,9 @@ async def test_concurrent_accepts_of_one_invitation_produce_one_active_membershi
     token = invited.accept_link.split("token=")[1]
 
     async def attempt(session: AsyncSession) -> object:
-        return await OrganizationService(session, **membership_writes(session)).accept_invitation(token)
+        return await OrganizationService(session, **membership_writes(session)).accept_invitation(
+            token, claims=NO_TERMS
+        )
 
     outcomes = await _race(sessions, attempt)
 
@@ -1002,8 +1023,8 @@ async def test_a_signup_racing_a_password_accept_never_overwrites_the_winner(
     async def accept() -> object:
         async with sessions() as session:
             try:
-                return await OrganizationService(session, **membership_writes(session)).accept_invitation(
-                    token, password="accepted-password"
+                return await claim_writes(session)["organizations"].accept_invitation(
+                    token, claims=NO_TERMS, password="accepted-password"
                 )
             except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
                 return exc
@@ -1017,10 +1038,7 @@ async def test_a_signup_racing_a_password_accept_never_overwrites_the_winner(
                     background_tasks=BackgroundTasks(),
                     email="iris@example.com",
                     password=f"signup-password-{index}",
-                    organizations=OrganizationService(
-                        session, membership_listener=None, workspace_listener=NullWorkspaceListener()
-                    ),
-                    **membership_writes(session),
+                    **claim_writes(session),
                 )
             except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
                 return exc
@@ -1117,10 +1135,7 @@ async def test_concurrent_open_signups_of_one_address_register_one_identity(
             background_tasks=BackgroundTasks(),
             email="nova@example.com",
             password="signup-password",
-            organizations=OrganizationService(
-                session, membership_listener=None, workspace_listener=NullWorkspaceListener()
-            ),
-            **membership_writes(session),
+            **claim_writes(session),
         )
 
     outcomes = await _race(sessions, signup)
@@ -1149,9 +1164,10 @@ async def test_concurrent_first_oauth_sign_ins_of_one_address_share_one_identity
     organizations_before = await _organization_count(async_db)
 
     async def sign_in(session: AsyncSession) -> uuid.UUID:
-        identity = await DeploymentIdentityProviderAdapter(
+        resolution = await DeploymentIdentityProviderAdapter(
             UserRepository(session),
             OrganizationService(session, **membership_writes(session)),
+            functools.partial(user_service.forget_unproven_access, session),
             open_signup=True,
         ).resolve(
             provider="google",
@@ -1160,7 +1176,7 @@ async def test_concurrent_first_oauth_sign_ins_of_one_address_share_one_identity
             email_verified=True,
         )
         await session.commit()
-        return identity.id
+        return resolution.identity.id
 
     outcomes = await _race(sessions, sign_in)
 
@@ -1229,7 +1245,9 @@ async def test_concurrent_accept_and_revoke_of_one_invitation_produce_one_consis
     assert invited.invitation_id is not None
 
     async def accept(session: AsyncSession) -> object:
-        return await OrganizationService(session, **membership_writes(session)).accept_invitation(token)
+        return await OrganizationService(session, **membership_writes(session)).accept_invitation(
+            token, claims=NO_TERMS
+        )
 
     async def revoke(session: AsyncSession) -> object:
         user = await UserRepository(session).get(owner.id)
@@ -1289,12 +1307,15 @@ async def test_concurrent_verifications_of_one_token_verify_exactly_once(
     )
     identity_id = identity.id
     token = generate_token()
+    identity.hashed_password = await hash_password_async("vera-password")
     identity.email_verification_token_hash = hash_token(token)
     identity.email_verification_token_expires_at = datetime.now(UTC) + timedelta(hours=1)
     await async_db.commit()
 
     async def attempt(session: AsyncSession) -> object:
-        return await user_service.verify_email(session, token=token)
+        return await user_service.verify_email(
+            session, organizations=_reader(session), token=token, password="vera-password", open_signup=True
+        )
 
     outcomes = await _race(sessions, attempt)
 
@@ -1341,10 +1362,8 @@ async def test_concurrent_resets_of_one_token_change_the_password_exactly_once(
             try:
                 await user_service.reset_password(
                     session,
-                    GatewayConfig(),
-                    organizations=OrganizationService(
-                        session, membership_listener=None, workspace_listener=NullWorkspaceListener()
-                    ),
+                    GatewayConfig(open_signup=True),
+                    organizations=_reader(session),
                     token=token,
                     new_password=f"racer-password-{index}",
                 )

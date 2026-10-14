@@ -13,12 +13,12 @@ vi.mock("@/shared/api/client", async (importOriginal) => {
   return { ...actual, apiFetch: vi.fn() }
 })
 
-function renderPage(hash: string) {
+function renderPage(hash: string, termsUrl: string | null = null) {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   })
   return render(
-    <DeploymentProvider value={bootstrap()}>
+    <DeploymentProvider value={bootstrap({ terms_url: termsUrl })}>
       <ThemeProvider>
         <QueryClientProvider client={client}>
           <ResetPasswordPage hash={hash} />
@@ -117,6 +117,62 @@ describe("ResetPasswordPage", () => {
         "This password reset link is invalid, expired, or already used",
       ),
     ).toBeNull()
+  })
+
+  it("sends the terms only when ticked, since only a first password needs them", async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined as never)
+    const user = userEvent.setup()
+    renderPage("#/reset-password?token=abc123", "https://example.com/terms")
+
+    await user.type(screen.getByLabelText("New password"), "correct-horse")
+    await user.type(
+      screen.getByLabelText("Confirm new password"),
+      "correct-horse",
+    )
+    // An ordinary reset of an account that accepted them long ago goes through as it is.
+    expect(screen.getByRole("button", { name: "Set password" })).toBeEnabled()
+    await user.click(screen.getByRole("button", { name: "Set password" }))
+
+    await screen.findByRole("heading", { name: "Password updated" })
+    const [, init] = vi.mocked(apiFetch).mock.calls[0] ?? []
+    expect(JSON.parse(String(init?.body))).toEqual({
+      token: "abc123",
+      new_password: "correct-horse",
+    })
+  })
+
+  it("shows the gateway's terms refusal for a first password, and goes through once they are ticked", async () => {
+    vi.mocked(apiFetch)
+      .mockRejectedValueOnce(
+        new ApiError(400, "Accept the terms of service to continue"),
+      )
+      .mockResolvedValueOnce(undefined as never)
+    const user = userEvent.setup()
+    renderPage("#/reset-password?token=abc123", "https://example.com/terms")
+
+    await user.type(screen.getByLabelText("New password"), "correct-horse")
+    await user.type(
+      screen.getByLabelText("Confirm new password"),
+      "correct-horse",
+    )
+    await user.click(screen.getByRole("button", { name: "Set password" }))
+
+    expect(
+      await screen.findByText("Accept the terms of service to continue"),
+    ).toBeInTheDocument()
+    await user.click(screen.getByLabelText("I accept the terms of service"))
+    expect(
+      screen.queryByText("Accept the terms of service to continue"),
+    ).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Set password" }))
+
+    await screen.findByRole("heading", { name: "Password updated" })
+    const [, retry] = vi.mocked(apiFetch).mock.calls[1] ?? []
+    expect(JSON.parse(String(retry?.body))).toEqual({
+      token: "abc123",
+      new_password: "correct-horse",
+      terms_accepted: true,
+    })
   })
 
   it("says there is nothing to set when the link carries no token", () => {

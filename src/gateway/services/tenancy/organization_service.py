@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.config import GatewayConfig
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions import TenancyConflictError, TenancyValidationError
+from gateway.exceptions.identity_exceptions import TermsNotAcceptedError
 from gateway.exceptions.organizations_exceptions import (
     InvitationAlreadyPendingError,
     InvitationAlreadyUsedError,
@@ -229,6 +230,24 @@ CALLER_WORKSPACE_LIMIT = 1000
 
 # How many invitation emails a bulk invite sends at once.
 _BULK_INVITE_MAIL_CONCURRENCY = 5
+
+
+@dataclass(frozen=True, slots=True)
+class InvitationClaimSettings:
+    """What this deployment asks of an invitee who chooses a first password from an invitation link.
+
+    ``terms_url`` is the terms the deployment publishes, which that invitee accepts as signup's do.
+    """
+
+    terms_url: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class InvitationAcceptance:
+    """What accepting an invitation by its link produced, and the identity it claimed, if it set a first password."""
+
+    result: AcceptInvitationResultPublic
+    claimed: User | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1399,10 +1418,11 @@ class OrganizationService:
         self,
         token: str,
         *,
+        claims: InvitationClaimSettings,
         password: str | None = None,
         full_name: str | None = None,
         terms_accepted: bool = False,
-    ) -> AcceptInvitationResultPublic:
+    ) -> InvitationAcceptance:
         """Resolve a pending invitation to an active membership, optionally setting a first password.
 
         No session is minted (see ``AcceptInvitationResultPublic``): this
@@ -1417,11 +1437,20 @@ class OrganizationService:
         only where ``_invitation_may_set_password`` allows, so a link can claim
         an unclaimed seat and never take over an account. The verification it
         stamps is recorded as vouched (``email_vouched_at``), which domain
-        auto-join does not trust.
+        auto-join does not trust. Where the deployment publishes terms
+        (``claims``), a first password needs ``terms_accepted``, as signup and
+        a reset claim do.
+
+        ``verification_pending`` on the result says the invitee chose a password
+        through signup and has not verified it yet, so the page can tell them to
+        verify before signing in. Accepting never verifies it: whoever signed up
+        may not be the person the invitation reached.
         """
         if password is not None:
             # Before the lookup, so a policy refusal says nothing about the token.
             validate_new_password(password)
+            if claims.terms_url is not None and not terms_accepted:
+                raise TermsNotAcceptedError
         _, _, organization = await self._resolve_pending_invitation(token)
         # Locked, then re-resolved, before any write: two concurrent accepts of
         # the same token could otherwise both pass the pending check above
@@ -1435,8 +1464,8 @@ class OrganizationService:
         # no longer pending, so it raises InvitationAlreadyUsedError instead.
         await self.organizations.lock(organization.id)
         invitation, membership, organization = await self._resolve_pending_invitation(token)
+        invitee = await self.users.get(membership.user_id)
         if password is not None:
-            invitee = await self.users.get(membership.user_id)
             if invitee is None or not await self._invitation_may_set_password(invitee, organization.id):
                 raise InvitationPasswordNotAcceptedError
             now = datetime.now(UTC)
@@ -1462,7 +1491,19 @@ class OrganizationService:
                 await self.db.rollback()
                 raise InvitationPasswordNotAcceptedError
         result = await self._resolve_invitation_to_active_membership(invitation, membership, organization)
-        return result.model_copy(update={"password_set": password is not None})
+        verification_pending = (
+            invitee is not None and invitee.hashed_password is not None and invitee.email_verified_at is None
+        )
+        claimed_identity = None
+        if password is not None and invitee is not None:
+            # The claim was a conditional UPDATE the session did not see, so the name it wrote is read back.
+            claimed_identity = await self.users.reload(invitee)
+        return InvitationAcceptance(
+            result=result.model_copy(
+                update={"password_set": password is not None, "verification_pending": verification_pending}
+            ),
+            claimed=claimed_identity,
+        )
 
     async def _resolve_invitation_to_active_membership(
         self,
@@ -1974,4 +2015,4 @@ class OrganizationService:
         )
 
 
-__all__ = ["OrganizationService", "SignupRegistration"]
+__all__ = ["InvitationAcceptance", "InvitationClaimSettings", "OrganizationService", "SignupRegistration"]

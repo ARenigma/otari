@@ -69,7 +69,7 @@ from gateway.services.playground_service import ForwardedToolOffer, LocalToolOff
 from gateway.services.providers import OrgProviderModelService, ProviderEndpointService, refresh_provider_endpoint_cache
 from gateway.services.rate_limits import RateLimitService
 from gateway.services.routing import clear_router_backend_cache
-from gateway.services.tenancy import OrganizationService, organization_guardrail_runner
+from gateway.services.tenancy import InvitationClaimSettings, OrganizationService, organization_guardrail_runner
 from gateway.services.tenancy.authorization import WorkspaceAccess, resolve_visible_workspace_scope
 from gateway.services.tenancy.deployment_user_service import DeploymentUserService
 from gateway.services.tenancy.membership_listener import MembershipListener
@@ -1206,6 +1206,14 @@ def get_organization_service(db: Annotated[AsyncSession, Depends(get_db)]) -> Or
 
 
 OrganizationServiceDep = Annotated[OrganizationService, Depends(get_organization_service)]
+
+
+def get_invitation_claim_settings(config: Annotated[GatewayConfig, Depends(get_config)]) -> InvitationClaimSettings:
+    """Return what this deployment asks of an invitee who chooses a first password from an invitation link."""
+    return InvitationClaimSettings(terms_url=config.terms_url)
+
+
+InvitationClaimSettingsDep = Annotated[InvitationClaimSettings, Depends(get_invitation_claim_settings)]
 
 
 def get_budget_service(
