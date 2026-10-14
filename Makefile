@@ -1,4 +1,4 @@
-.PHONY: help dev dashboard test test-unit test-integration test-libs lint lint-python lint-web check-architecture typecheck typecheck-python typecheck-web openapi-check postman postman-check changelog check-migrations railway-template-check
+.PHONY: help dev dashboard test test-unit test-integration test-libs test-frameworks lint lint-python lint-web check-architecture typecheck typecheck-python typecheck-web openapi-check postman postman-check changelog check-migrations railway-template-check
 
 help:
 	@printf "Available targets:\n"
@@ -8,6 +8,7 @@ help:
 	@printf "  test-unit Run unit tests\n"
 	@printf "  test-integration Run integration tests\n"
 	@printf "  test-libs Run the any-search and any-fetch tests\n"
+	@printf "  test-frameworks Run the agent-framework packages and docs pages against a real Otari\n"
 	@printf "  lint Run every linter, fixing what it can (lint-python + lint-web)\n"
 	@printf "  lint-python Run the pre-commit hooks: architecture, migrations, Ruff lint and format\n"
 	@printf "  lint-web Run Biome over the dashboard\n"
@@ -63,6 +64,10 @@ test-integration:
 test-libs:
 	uv run pytest -v any-search/tests
 	uv run pytest -v any-fetch/tests
+
+# Its own environment and lock (integrations/e2e/README.md), so the frameworks never enter uv.lock.
+test-frameworks:
+	cd integrations/e2e && uv run --locked pytest -v -c pyproject.toml --rootdir . . ../pydantic-ai-otari/tests ../langchain-otari/tests
 
 # NOTE: The linters fix what they can in place, so a run can leave changes to commit.
 lint: lint-python lint-web
