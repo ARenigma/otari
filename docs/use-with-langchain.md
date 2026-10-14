@@ -20,8 +20,9 @@ Create an API key at [otari.ai](https://otari.ai) and export it:
 export OTARI_API_KEY=<your-otari-key>
 ```
 
-That is all the configuration otari.ai's gateway needs. For a gateway you run
-yourself, use a key it issued and also export its API root:
+That is all the configuration otari.ai's gateway needs, once your organization
+there has credit or provider keys of its own; without either, it answers 402. For
+a gateway you run yourself, use a key it issued and also export its API root:
 
 ```bash
 export OTARI_BASE_URL=http://localhost:8000/api/v1   # your gateway's URL plus /api/v1

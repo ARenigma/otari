@@ -20,8 +20,9 @@ Create an API key at [otari.ai](https://otari.ai) and export it:
 export OTARI_API_KEY=<your-otari-key>
 ```
 
-That is all the configuration otari.ai's gateway needs. For a gateway you run
-yourself, use a key it issued and also export its API root:
+That is all the configuration otari.ai's gateway needs, once your organization
+there has credit or provider keys of its own; without either, it answers 402. For
+a gateway you run yourself, use a key it issued and also export its API root:
 
 ```bash
 export OTARI_BASE_URL=http://localhost:8000/api/v1   # your gateway's URL plus /api/v1
@@ -118,12 +119,12 @@ asyncio.run(main())
 
 ## Choosing a model
 
-The model name is whatever your gateway routes. The examples on this page use
-`openai:gpt-4o`, which needs an OpenAI key on the gateway.
+The model name is whatever your gateway routes, as `provider:model`. The same
+agent code works across providers: every example on this page runs unchanged on
+`openai:gpt-4o`, `anthropic:claude-sonnet-4-6` and `mistral:mistral-large-latest`.
 
-- **On otari.ai:** a managed model, `mzai:<catalog-id>` such as
-  `mzai:moonshotai/Kimi-K2.6`, or `provider:model` for a provider whose key your
-  organization has added, such as `anthropic:claude-sonnet-4-6`.
+- **On otari.ai:** any model your organization's catalog lists, which
+  `GET /api/v1/models` returns for your key.
 - **On your own gateway:** `provider:model` for any provider it is configured
   with, for example `openai:gpt-4o` or `mistral:mistral-large-latest`.
 - **A routing policy or alias:** its name, for example `OtariModel("support-agent")`.
