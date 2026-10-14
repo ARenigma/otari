@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MASTER_KEY = "framework-e2e-master-key"
 HEALTH_TIMEOUT_SECONDS = 90
+# Set to an OpenAI key to serve the snippets from the real OpenAI API instead of the mock.
+LIVE_OPENAI_KEY = os.environ.get("OTARI_E2E_LIVE_OPENAI_KEY")
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class Gateway:
     api_key: str
     provider: mock_provider.MockProvider
     log_path: Path
+    live: bool
 
     def env(self) -> dict[str, str]:
         """The environment a docs snippet runs in: what the pages tell a reader to export."""
@@ -94,7 +97,9 @@ def gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
             # The mock's models have no rates, and pricing is fail-closed by default.
             "require_pricing": False,
             "providers": {
-                "openai": {"provider_type": "openai", "api_base": provider.base_url, "api_key": "mock-provider-key"},
+                "openai": {"provider_type": "openai", "api_key": LIVE_OPENAI_KEY}
+                if LIVE_OPENAI_KEY
+                else {"provider_type": "openai", "api_base": provider.base_url, "api_key": "mock-provider-key"},
             },
         }
         config_path = workdir / "config.yml"
@@ -140,7 +145,9 @@ def gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
 
             _request("POST", f"{base_url}/api/v1/users", {"user_id": "framework-e2e", "alias": "Framework e2e"})
             key = _request("POST", f"{base_url}/api/v1/keys", {"key_name": "framework-e2e", "user_id": "framework-e2e"})
-            yield Gateway(base_url=base_url, api_key=key["key"], provider=provider, log_path=log_path)
+            yield Gateway(
+                base_url=base_url, api_key=key["key"], provider=provider, log_path=log_path, live=bool(LIVE_OPENAI_KEY)
+            )
         finally:
             process.terminate()
             try:

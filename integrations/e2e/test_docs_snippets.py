@@ -56,7 +56,10 @@ def test_snippet_runs_through_otari(gateway: Gateway, page: str, code: str) -> N
         f"\n--- gateway log\n{gateway.tail()}"
     )
     assert result.stdout.strip(), f"A block on docs/{page} printed nothing, so a reader cannot see it work"
-    assert len(gateway.provider.requests) > before, f"A block on docs/{page} never reached the provider through Otari"
+    if not gateway.live:
+        assert len(gateway.provider.requests) > before, (
+            f"A block on docs/{page} never reached the provider through Otari"
+        )
 
 
 def test_otari_recorded_the_snippets_usage(gateway: Gateway) -> None:
