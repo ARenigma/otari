@@ -14,6 +14,9 @@ class PasswordLinkPublic(BaseModel):
             "links, or the send failed."
         )
     )
+    # A bearer link handed back on purpose, the way an invitation's accept_link is: only a deployment operator
+    # can call the route, and only when mail did not go out, since the operator is then the one way to reach
+    # the owner. It is never logged, and a mailed link is never returned.
     link: str | None = Field(
         default=None,
         description=(
