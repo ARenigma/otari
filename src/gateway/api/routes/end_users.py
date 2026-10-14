@@ -23,9 +23,16 @@ from gateway.models.api_keys import APIKey
 from gateway.schemas.budgets import EndUserBudgetPublic, EndUserPublic, EndUserPut, EndUserUpdate
 from gateway.services.budgets import BudgetService, check_path_external_id
 
+
+async def _require_available_owner(api_key: ServiceKey, budgets: BudgetServiceDep) -> None:
+    """Refuse a key whose user is blocked or deleted, as its end users' requests are."""
+    await budgets.require_end_user_owner(api_key=api_key)
+
+
 # On the router, so a route added here later cannot be reached with another credential.
-router = APIRouter(prefix="/end-users", tags=["end-users"], dependencies=[Depends(verify_service_key)])
-budgets_router = APIRouter(prefix="/end-user-budgets", tags=["end-users"], dependencies=[Depends(verify_service_key)])
+_GATES = [Depends(verify_service_key), Depends(_require_available_owner)]
+router = APIRouter(prefix="/end-users", tags=["end-users"], dependencies=_GATES)
+budgets_router = APIRouter(prefix="/end-user-budgets", tags=["end-users"], dependencies=_GATES)
 
 ExternalId = Annotated[str, Path(description="The id the service names the end user by in a request's user field")]
 ExternalIdParam = Annotated[

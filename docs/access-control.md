@@ -228,7 +228,10 @@ proxy can merge the `//` of an id like `ab//cd`, and an HTTP client collapses
 id with a `.` or `..` segment is refused there with 400.
 
 These routes take only a service key: another API key is refused with 403,
-and the master key and a dashboard session do not authenticate them.
+and the master key and a dashboard session do not authenticate them. A service
+key whose own user is blocked or deleted is refused with 403 as well, since its
+end users cannot spend either; the operator's `/api/v1/keys/{key_id}/end-users`
+routes still reach them.
 `GET /api/v1/end-users` takes `skip` and `limit` (up to 1000), narrows on
 `budget_id`, `blocked` and `external_id`, and with `include_total=true` counts
 every match in the `Otari-Total-Count` header. Its list and the counts on
