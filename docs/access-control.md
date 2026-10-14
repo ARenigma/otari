@@ -453,6 +453,16 @@ Signup never sets a password on an address that is already verified. That is the
 state a Google or GitHub sign-in leaves, and the person who signs in that way
 adds a password from Account settings while signed in.
 
+"Forgot your password?" mails a reset link to an address that has a password,
+and also to one an owner or admin added or invited that nobody has signed in to
+yet, so that person can choose a first password. Completing the reset verifies
+the address, since the link reached its mailbox. Where `open_signup` is
+disabled, every address that is not yet verified, with or without a password,
+follows the signup rule above: it gets a link, and the link completes, only
+while it is an active member or holds an invitation it can still accept, so a
+revoked invitee gets none. An address that signs in only through a provider
+gets no link.
+
 Either way the response says the same thing whether the address was unknown,
 already claimed, already verified, or genuinely just claimed, so its body
 discloses nothing about the address. Response *timing* still does, because the

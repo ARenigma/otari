@@ -480,7 +480,12 @@ async def resend_verification_email(
 
 
 async def request_password_reset(
-    db: AsyncSession, config: GatewayConfig, *, background_tasks: BackgroundTasks, email: str
+    db: AsyncSession,
+    config: GatewayConfig,
+    *,
+    organizations: OrganizationService,
+    background_tasks: BackgroundTasks,
+    email: str,
 ) -> None:
     """Mail a password-reset link, or do nothing: the caller cannot tell which.
 
@@ -490,13 +495,30 @@ async def request_password_reset(
     same reason. Works on an unverified identity too, deliberately: forgetting
     a password predates ever verifying it, so gating this on
     ``email_verified_at`` would strand exactly the caller it exists to help.
+
+    Works on an identity an admin added or invited and nobody has claimed (no
+    password, unverified), since the link proves the mailbox and "forgot my
+    password" is what that person tries. Completing it verifies the address.
+    Where ``open_signup`` is off, such an identity follows signup's rule and
+    needs an active membership or an invitation it can still accept. A verified
+    identity with no password signs in with a provider and adds a password from
+    its account, so it is left alone here as signup leaves it alone.
     """
     mailer = Mailer(config)
     mailer.require_ready()
 
     address = validated_email(email)
     identity = await UserRepository(db).get_by_email(address)
-    if identity is None or identity.hashed_password is None or not identity.is_active:
+    if (
+        identity is None
+        or not identity.is_active
+        or (identity.hashed_password is None and identity.email_verified_at is not None)
+        or (
+            not config.open_signup
+            and identity.email_verified_at is None
+            and not await organizations.has_live_membership(identity.id)
+        )
+    ):
         await verify_absent_password_async(_TIMING_EQUALIZER)
         return
 
@@ -516,7 +538,14 @@ async def request_password_reset(
     )
 
 
-async def reset_password(db: AsyncSession, *, token: str, new_password: str) -> None:
+async def reset_password(
+    db: AsyncSession,
+    config: GatewayConfig,
+    *,
+    organizations: OrganizationService,
+    token: str,
+    new_password: str,
+) -> None:
     """Complete a password reset. Single-use, the same way ``verify_email`` is.
 
     No current password to prove, unlike ``update_password``: that is the
@@ -533,6 +562,9 @@ async def reset_password(db: AsyncSession, *, token: str, new_password: str) -> 
     and each receiving success, with the last write winning. The second racer
     through the lock re-resolves to nothing and raises instead. Same pattern
     as ``organization_service.accept_invitation`` and ``verify_email`` above.
+
+    Where ``open_signup`` is off, an unverified identity is held to signup's
+    rule again here, because the roster can drop it after the link was mailed.
     """
     users = UserRepository(db)
     identity = await users.get_by_reset_token_hash(hash_token(token))
@@ -544,13 +576,23 @@ async def reset_password(db: AsyncSession, *, token: str, new_password: str) -> 
         raise ResetTokenInvalidError
     if identity.password_reset_token_expires_at < datetime.now(UTC):
         raise ResetTokenInvalidError
+    if (
+        not config.open_signup
+        and identity.email_verified_at is None
+        and not await organizations.has_live_membership(identity.id)
+    ):
+        raise ResetTokenInvalidError
     validate_new_password(new_password)
 
     identity.hashed_password = await hash_password_async(new_password)
     identity.password_reset_token_hash = None
     identity.password_reset_token_expires_at = None
-    # The reset link went to the mailbox, which proves what a vouch only asserted.
+    # The reset link went to the mailbox, which proves the address as well as what a vouch only asserted.
     identity.email_vouched_at = None
+    if identity.email_verified_at is None:
+        identity.email_verified_at = datetime.now(UTC)
+        identity.email_verification_token_hash = None
+        identity.email_verification_token_expires_at = None
     db.add(identity)
     await revoke_user_dashboard_sessions(db, identity.id)
     await db.commit()
