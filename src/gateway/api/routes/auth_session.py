@@ -50,6 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
     MembershipListenerDep,
+    OrganizationServiceDep,
     UnitOfWorkDep,
     WorkspaceListenerDep,
     get_config,
@@ -172,8 +173,11 @@ class SessionResponse(BaseModel):
 
     expires_at: datetime = Field(description="When the session cookie stops being accepted.")
     user_id: uuid.UUID = Field(description="The identity this session speaks for.")
-    active_organization_id: uuid.UUID = Field(
-        description="The organization that identity is acting in, which scopes every tenancy surface."
+    active_organization_id: uuid.UUID | None = Field(
+        description=(
+            "The organization that identity is acting in, which scopes every tenancy surface. "
+            "Null when it is an active member of none, as an invitee who has not accepted yet is not."
+        )
     )
 
 
@@ -288,6 +292,7 @@ async def create_session(
     uow: UnitOfWorkDep,
     membership_listener: MembershipListenerDep,
     workspace_listener: WorkspaceListenerDep,
+    organizations: OrganizationServiceDep,
 ) -> SessionResponse:
     """Verify a sign-in credential and set the HttpOnly session cookie.
 
@@ -349,6 +354,7 @@ async def create_session(
         # racing, which the service settles on its own, and a database that
         # cannot stage this cannot stage the session row either.
         await OrganizationDomainService(db).auto_join_for_user(identity)
+        active_organization_id = await organizations.active_organization_id_for_sign_in(identity)
         token, expires_at = await create_dashboard_session(db, config.dashboard_session_ttl_hours, user_id=identity.id)
         await db.commit()
     except DATABASE_ERRORS as exc:
@@ -359,7 +365,7 @@ async def create_session(
     return SessionResponse(
         expires_at=expires_at,
         user_id=identity.id,
-        active_organization_id=identity.active_organization_id,
+        active_organization_id=active_organization_id,
     )
 
 

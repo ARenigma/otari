@@ -47,6 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.api.deps import (
     GrowthSignalPortDep,
     IdentityProviderPortDep,
+    OrganizationServiceDep,
     get_config,
     get_db,
     record_auth_failure,
@@ -168,8 +169,11 @@ class OAuthSessionResponse(BaseModel):
 
     expires_at: datetime = Field(description="When the session cookie stops being accepted.")
     user_id: uuid.UUID = Field(description="The identity this session speaks for.")
-    active_organization_id: uuid.UUID = Field(
-        description="The organization that identity is acting in, which scopes every tenancy surface."
+    active_organization_id: uuid.UUID | None = Field(
+        description=(
+            "The organization that identity is acting in, which scopes every tenancy surface. "
+            "Null when it is an active member of none, as an invitee who has not accepted yet is not."
+        )
     )
 
 
@@ -254,6 +258,7 @@ async def callback(
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
+    organizations: OrganizationServiceDep,
     flow_cookie: FlowCookie = None,
 ) -> OAuthSessionResponse:
     """Exchange an authorization code and set the HttpOnly session cookie.
@@ -307,9 +312,10 @@ async def callback(
         # outside, that failure would skip the rollback and the log line below
         # and surface as a bare 500 from the generic handler.
         #
-        # One commit for the whole sign-in: the adapter's link and verification
-        # stamp are on this same session, so they land with the session row or
-        # with neither.
+        # One commit for the sign-in: the adapter's link and verification stamp
+        # are on this same session, so they land with the session row or with
+        # neither. Only the tenancy a new or reclaimed account gets is committed
+        # earlier, by the adapter, before it changes the account.
         # Before the session row and inside the same transaction, so a new
         # membership and the sign-in that earned it land together or not at all.
         # Not guarded: the only expected failure is two concurrent sign-ins
@@ -317,6 +323,7 @@ async def callback(
         # cannot stage this cannot stage the session row either.
         identity = resolution.identity
         await OrganizationDomainService(db).auto_join_for_user(identity)
+        active_organization_id = await organizations.active_organization_id_for_sign_in(identity)
         token, expires_at = await create_dashboard_session(db, config.dashboard_session_ttl_hours, user_id=identity.id)
         await db.commit()
     except DATABASE_ERRORS as exc:
@@ -328,7 +335,7 @@ async def callback(
     return OAuthSessionResponse(
         expires_at=expires_at,
         user_id=identity.id,
-        active_organization_id=identity.active_organization_id,
+        active_organization_id=active_organization_id,
     )
 
 

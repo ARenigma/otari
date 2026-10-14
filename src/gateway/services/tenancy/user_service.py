@@ -390,9 +390,11 @@ async def create_user_for_signup(
         # address with no stored hash.
         await verify_absent_password_async(password)
         return None
-
     try:
         async with uow:
+            if identity is not None and config.open_signup:
+                # An identity no organization still wants gets what a new address gets, and a lost race rolls it back.
+                await organizations.provision_tenancy_for_claim(identity, full_name=full_name)
             if identity is None:
                 if not config.open_signup:
                     # The same bcrypt cost as the branch above, for the same reason: an
@@ -630,9 +632,14 @@ async def reset_password(
 
     A reset on an unverified identity is a claim, so it is held to
     ``unverified_identity_is_claimable`` when it completes, not only when the
-    link was mailed. Where the deployment publishes terms and the identity has
-    accepted none, ``terms_accepted`` is required, because the reset may be
-    what makes the account usable at all.
+    link was mailed. Under ``open_signup``, such a claim of an identity no
+    organization still wants gives it an organization and workspace of its own,
+    as signup and a provider sign-in do; that tenancy is committed before the
+    identity is changed. ``organizations`` must then be built on a Unit of Work.
+
+    Where the deployment publishes terms and the identity has accepted none,
+    ``terms_accepted`` is required, because the reset may be what makes the
+    account usable at all.
 
     The mailbox proof replaces an unverified or vouched address, so the
     passkeys registered before it go as well as the sessions
@@ -657,22 +664,17 @@ async def reset_password(
     rule again here, because the roster can drop it after the link was mailed.
     """
     users = UserRepository(db)
-    identity = await users.get_by_reset_token_hash(hash_token(token))
-    if identity is None or identity.password_reset_token_expires_at is None or not identity.is_active:
-        raise ResetTokenInvalidError
-    await users.lock(identity.id)
-    identity = await users.get_by_reset_token_hash(hash_token(token))
-    if identity is None or identity.password_reset_token_expires_at is None or not identity.is_active:
-        raise ResetTokenInvalidError
-    if identity.password_reset_token_expires_at < datetime.now(UTC):
-        raise ResetTokenInvalidError
-    if not await unverified_identity_is_claimable(organizations, identity, open_signup=config.open_signup):
-        raise ResetTokenInvalidError
+    identity = await _locked_reset_identity(users, organizations, token=token, open_signup=config.open_signup)
     validate_new_password(new_password)
+    needs_terms = identity.terms_accepted_at is None and config.terms_url is not None
+    if needs_terms and not terms_accepted:
+        raise TermsNotAcceptedError
+    if config.open_signup and identity.email_verified_at is None:
+        await organizations.provision_tenancy_for_claim(identity, full_name=None)
+        # That block committed, which released the lock, so the token is resolved and checked again under a new one.
+        identity = await _locked_reset_identity(users, organizations, token=token, open_signup=config.open_signup)
     now = datetime.now(UTC)
-    if identity.terms_accepted_at is None and config.terms_url is not None:
-        if not terms_accepted:
-            raise TermsNotAcceptedError
+    if needs_terms:
         identity.terms_accepted_at = now
 
     first_claim = identity.hashed_password is None and identity.email_verified_at is None
@@ -692,6 +694,32 @@ async def reset_password(
     db.add(identity)
     await db.commit()
     return identity if first_claim else None
+
+
+async def _locked_reset_identity(
+    users: UserRepository, organizations: OrganizationService, *, token: str, open_signup: bool
+) -> User:
+    """Lock the identity a reset token names and return it, while the token can still be redeemed.
+
+    Resolved again under the lock, so a concurrent reset that spent the token is
+    seen, and then held to every condition a redemption needs: the identity is
+    active, the token has not expired, and an unverified identity is still
+    claimable. Anything else raises ``ResetTokenInvalidError``.
+    """
+    identity = await users.get_by_reset_token_hash(hash_token(token))
+    if identity is None:
+        raise ResetTokenInvalidError
+    await users.lock(identity.id)
+    identity = await users.get_by_reset_token_hash(hash_token(token))
+    if (
+        identity is None
+        or not identity.is_active
+        or identity.password_reset_token_expires_at is None
+        or identity.password_reset_token_expires_at < datetime.now(UTC)
+        or not await unverified_identity_is_claimable(organizations, identity, open_signup=open_signup)
+    ):
+        raise ResetTokenInvalidError
+    return identity
 
 
 async def operator_has_password(db: AsyncSession) -> bool:

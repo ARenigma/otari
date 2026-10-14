@@ -10798,10 +10798,9 @@ export interface components {
         OAuthSessionResponse: {
             /**
              * Active Organization Id
-             * Format: uuid
-             * @description The organization that identity is acting in, which scopes every tenancy surface.
+             * @description The organization that identity is acting in, which scopes every tenancy surface. Null when it is an active member of none, as an invitee who has not accepted yet is not.
              */
-            active_organization_id: string;
+            active_organization_id: string | null;
             /**
              * Expires At
              * Format: date-time
@@ -12276,10 +12275,9 @@ export interface components {
         PasskeySessionResponse: {
             /**
              * Active Organization Id
-             * Format: uuid
-             * @description The organization that identity is acting in, which scopes every tenancy surface.
+             * @description The organization that identity is acting in, which scopes every tenancy surface. Null when it is an active member of none, as an invitee who has not accepted yet is not.
              */
-            active_organization_id: string;
+            active_organization_id: string | null;
             /**
              * Expires At
              * Format: date-time
@@ -14380,10 +14378,9 @@ export interface components {
         SessionResponse: {
             /**
              * Active Organization Id
-             * Format: uuid
-             * @description The organization that identity is acting in, which scopes every tenancy surface.
+             * @description The organization that identity is acting in, which scopes every tenancy surface. Null when it is an active member of none, as an invitee who has not accepted yet is not.
              */
-            active_organization_id: string;
+            active_organization_id: string | null;
             /**
              * Expires At
              * Format: date-time

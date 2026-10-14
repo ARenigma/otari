@@ -19,8 +19,9 @@ from gateway.services.tenancy.email_address import validated_email
 class DeploymentIdentityProviderAdapter(IdentityProviderPort):
     """Applies this deployment's ``open_signup`` setting to an OAuth sign-in.
 
-    The adapter leaves its changes for the caller to commit, except a new account's tenancy,
-    which ``OrganizationService.provision_signup_tenancy`` commits in its own Unit of Work block.
+    The adapter leaves its changes to the account for the caller to commit. The one exception is the
+    organization and workspace a new or reclaimed account gets, which ``OrganizationService`` commits in
+    its own Unit of Work block before the account itself is changed.
     """
 
     def __init__(
@@ -71,6 +72,11 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
         An account nobody has verified yet is signed in only where ``unverified_identity_is_claimable`` allows,
         the rule the signup form and a password reset follow.
 
+        Under ``open_signup``, claiming an unverified account that no organization still wants (its
+        invitation revoked, declined or lapsed, or the member removed) gives it an organization and
+        workspace of its own and points it at them, the way a new account is created. That tenancy is
+        committed first, and the account is read again under a lock before this sign-in changes it.
+
         ``new_account`` is true when this sign-in created the account, or is the first way in to one an
         organization added and nobody had claimed.
 
@@ -111,6 +117,12 @@ class DeploymentIdentityProviderAdapter(IdentityProviderPort):
             raise OAuthIdentityUnknownError(label)
 
         first_claim = identity.hashed_password is None and identity.email_verified_at is None
+        if not created and self._open_signup and identity.email_verified_at is None:
+            await self._organizations.provision_tenancy_for_claim(identity, full_name=full_name)
+            # That block committed, which released the lock taken above.
+            identity = await self._users.get_locked(identity.id)
+            if identity is None or not identity.is_active:
+                raise OAuthIdentityUnknownError(label)
         if identity.oauth_provider is None:
             identity.oauth_provider = provider
         if identity.email_verified_at is None or identity.email_vouched_at is not None:
