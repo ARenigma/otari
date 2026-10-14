@@ -1102,6 +1102,95 @@ def test_a_password_on_an_already_verified_address_survives_linking_a_provider(
     assert password_sign_in.status_code == 200, password_sign_in.text
 
 
+def test_a_linked_sign_in_proves_an_address_an_operator_link_left_vouched(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    test_config: GatewayConfig,
+    signup_configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    db_session: Session,
+) -> None:
+    # A password chosen through a shared operator link never reached the mailbox, so the owner signing in
+    # through their existing provider link takes the account back, as a first sign-in would.
+    add_member(client, master_key_header, email="ada@example.com")
+    gateway_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="gateway")
+    try:
+        sign_up(client, email="ada@example.com", password=PASSWORD)
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+    token = _TOKEN_IN_LINK.search(caplog.text)
+    assert token, caplog.text
+    verified = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token.group(1), "password": PASSWORD})
+    assert verified.status_code == 200, verified.text
+    stub_exchange(monkeypatch)
+    linked = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["password_removed"] is False
+    client.cookies.clear()
+
+    monkeypatch.setattr(test_config, "mail_transport", "none")
+    identity = _identity(db_session, "ada@example.com")
+    issued = client.post(f"{API_ROOT}/admin/users/{identity.id}/password-link", headers=master_key_header)
+    assert issued.status_code == 201, issued.text
+    shared_token = issued.json()["link"].split("token=", 1)[1]
+    redeemed = client.post(
+        f"{API_ROOT}/auth/password/reset/confirm", json={"token": shared_token, "new_password": UNPROVEN_PASSWORD}
+    )
+    assert redeemed.status_code == 204, redeemed.text
+    vouched_cookie = _signed_in_cookie(client, email="ada@example.com", password=UNPROVEN_PASSWORD)
+    db_session.expire_all()
+    _give_a_passkey_and_a_reset_link(db_session, _identity(db_session, "ada@example.com"))
+
+    signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+    assert signed_in.status_code == 200, signed_in.text
+    assert signed_in.json()["password_removed"] is True
+    client.cookies.clear()
+
+    client.cookies.set(SESSION_COOKIE_NAME, vouched_cookie)
+    assert client.get(f"{API_ROOT}/organizations/me").status_code == 401
+    client.cookies.clear()
+    password_sign_in = client.post(
+        f"{API_ROOT}/auth/session", json={"email": "ada@example.com", "password": UNPROVEN_PASSWORD}
+    )
+    assert password_sign_in.status_code == 401
+    db_session.expire_all()
+    after = _identity(db_session, "ada@example.com")
+    assert after.email_vouched_at is None
+    assert after.hashed_password is None
+    assert after.password_reset_token_hash is None
+    assert _passkeys(db_session, after) == []
+
+
+def test_a_linked_sign_in_keeps_a_proven_password(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    signup_configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    add_member(client, master_key_header, email="ada@example.com")
+    gateway_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="gateway")
+    try:
+        sign_up(client, email="ada@example.com", password=PASSWORD)
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+    token = _TOKEN_IN_LINK.search(caplog.text)
+    assert token, caplog.text
+    verified = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token.group(1), "password": PASSWORD})
+    assert verified.status_code == 200, verified.text
+    stub_exchange(monkeypatch)
+    for _ in range(2):
+        signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+        assert signed_in.status_code == 200, signed_in.text
+        assert signed_in.json()["password_removed"] is False
+        client.cookies.clear()
+
+    assert _signed_in_cookie(client, email="ada@example.com", password=PASSWORD)
+
+
 def test_a_second_provider_sign_in_leaves_the_identity_as_the_first_left_it(
     client: TestClient,
     master_key_header: dict[str, str],

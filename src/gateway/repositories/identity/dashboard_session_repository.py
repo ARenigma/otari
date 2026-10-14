@@ -20,6 +20,10 @@ class DashboardSessionRepository(BaseRepository[DashboardSession, Never, Never])
         """Stage the deletion of every session that expired before ``now``."""
         await self.db.execute(delete(DashboardSession).where(DashboardSession.expires_at < now))
 
+    async def delete_for_user(self, user_id: uuid.UUID) -> None:
+        """Stage the deletion of every session one account holds."""
+        await self.db.execute(delete(DashboardSession).where(DashboardSession.user_id == user_id))
+
     async def add(self, *, token_hash: str, user_id: uuid.UUID, created_at: datetime, expires_at: datetime) -> None:
         """Stage a session for an account."""
         self.db.add(

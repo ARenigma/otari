@@ -92,6 +92,7 @@ class IdentityService:
         """``terms_url`` is the terms the deployment publishes, or ``None`` where it publishes none."""
         self._uow = uow
         self._links = repositories.links
+        self._passkeys = repositories.passkeys
         self._sessions = repositories.sessions
         self._users = repositories.users
         self._identity_provider = identity_provider
@@ -106,7 +107,8 @@ class IdentityService:
     async def sign_in_with_oauth(self, external: ProviderIdentity, *, terms_accepted: bool = False) -> SignIn:
         """Sign in the account that an identity a provider has proven belongs to.
 
-        An identity linked to an account signs in as that account, and its password and verification stay as they are.
+        An identity linked to an account signs in as that account, and its password and verification stay as they are,
+        unless its address is only vouched for: the sign-in then proves it, as a first sign-in does.
         An identity with no link signs in as the account the identity provider policy returns, and is linked to it.
         An account holds at most one link for each provider.
         Where the deployment publishes terms, a sign-in that creates the account, or is the first way in to one
@@ -178,7 +180,8 @@ class IdentityService:
         Raises:
             DeploymentUserNotFoundError: If there is no such account.
             PasswordLinkUnavailableError: If the account is deactivated, has no address, is verified and has no
-                password, or is unverified and ``unverified_identity_is_claimable`` refuses it.
+                password, or is unverified and ``unverified_identity_is_claimable`` refuses it, which only
+                happens where ``open_signup`` is off.
 
         """
         mailed = self._mailer.can_send_links
@@ -235,7 +238,9 @@ class IdentityService:
     async def _account_for(self, external: ProviderIdentity, label: str) -> IdentityResolution:
         link = await self._links.get_by_identity(provider=external.provider, subject=external.subject)
         if link is not None:
-            return IdentityResolution(identity=await self._active_account(link.user_id, label), new_account=False)
+            account = await self._active_account(link.user_id, label)
+            password_removed = await self._prove_vouched_address(account)
+            return IdentityResolution(identity=account, new_account=False, password_removed=password_removed)
 
         resolution = await self._identity_provider.resolve(external)
         account = await self._active_account(resolution.identity.id, label)
@@ -251,6 +256,27 @@ class IdentityService:
             )
             raise OAuthAccountLinkedElsewhereError(label)
         return replace(resolution, identity=account)
+
+    async def _prove_vouched_address(self, account: User) -> bool:
+        """Treat a sign-in through a provider link as proof of a vouched address, and say if a password went.
+
+        The link was made when the provider verified this account's address, so its holder owns the account.
+        A vouched address had a password chosen through a link its mailbox never saw, so that password, the
+        reset and verification links, the sessions and the passkeys set up since go, as on a first sign-in.
+        """
+        if account.email_vouched_at is None:
+            return False
+        password_removed = account.hashed_password is not None
+        account.email_vouched_at = None
+        account.hashed_password = None
+        account.email_verification_token_hash = None
+        account.email_verification_token_expires_at = None
+        account.password_reset_token_hash = None
+        account.password_reset_token_expires_at = None
+        self._users.stage(account)
+        await self._sessions.delete_for_user(account.id)
+        await self._passkeys.delete_for_user(account.id)
+        return password_removed
 
     def _record_terms(self, account: User, *, terms_accepted: bool) -> None:
         """Stage the acceptance of the published terms on a new account, or refuse one that has none.

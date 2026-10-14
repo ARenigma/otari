@@ -106,8 +106,8 @@ export interface paths {
          *     than proven. A new link replaces any earlier reset link for the account.
          *
          *     Refused with 409 for a deactivated account, one with no address, one that has no password and signs in
-         *     with a provider or a passkey (its owner adds a password once signed in), and an unverified address no
-         *     organization still has as a member or invitee.
+         *     with a provider or a passkey (its owner adds a password once signed in), and, where open_signup is
+         *     disabled, an unverified address no organization still has as a member or invitee.
          */
         post: operations["admin-issue_password_link"];
         delete?: never;

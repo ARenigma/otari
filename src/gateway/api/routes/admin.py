@@ -131,8 +131,8 @@ async def issue_password_link(identities: IdentityServiceDep, user_id: uuid.UUID
     than proven. A new link replaces any earlier reset link for the account.
 
     Refused with 409 for a deactivated account, one with no address, one that has no password and signs in
-    with a provider or a passkey (its owner adds a password once signed in), and an unverified address no
-    organization still has as a member or invitee.
+    with a provider or a passkey (its owner adds a password once signed in), and, where open_signup is
+    disabled, an unverified address no organization still has as a member or invitee.
     """
     link = await identities.issue_password_link(user_id)
     return PasswordLinkPublic(mail_sent=link.mail_sent, link=link.link, expires_at=link.expires_at)
