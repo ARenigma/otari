@@ -43,8 +43,6 @@ Models are addressed as `gemini:<model>`:
 
 ```text
 gemini:gemini-3-flash-preview
-gemini:gemini-3.8-flash
-gemini:gemini-3.1-pro-preview
 ```
 
 Everything after the colon is passed straight to Gemini, so any model your key can access works. Google retires older models for new keys, so check the [model list](https://ai.google.dev/gemini-api/docs/models) if a name is rejected.
