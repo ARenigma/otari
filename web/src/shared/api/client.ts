@@ -14,11 +14,14 @@ import { getPasskeyAssertion } from "@/shared/helpers/webauthn"
 
 export class ApiError extends Error {
   status: number
+  /** The refusal's `Otari-Error-Code`, or `""` where it carries none. */
+  code: string
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code = "") {
     super(message)
     this.name = "ApiError"
     this.status = status
+    this.code = code
   }
 }
 
@@ -103,19 +106,26 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
 // the shape every refusal this gateway writes has and the shape an intermediary
 // answering for it does not. Callers that only need something to display take
 // `message`; the one caller that has to tell a gateway refusal from a proxy's
-// own status takes `detail`.
+// own status takes `detail`. `code` is the body's stable error code, or `""`.
 async function readRefusal(
   response: Response,
-): Promise<{ detail: string | null; message: string }> {
+): Promise<{ detail: string | null; message: string; code: string }> {
   let detail: string | null = null
   let message: string | null = null
+  let code = ""
   try {
-    const data = JSON.parse(await response.text()) as { detail?: unknown }
+    const data = JSON.parse(await response.text()) as {
+      detail?: unknown
+      code?: unknown
+    }
     if (typeof data.detail === "string") {
       detail = data.detail
       message = data.detail
     } else if (data.detail != null) {
       message = JSON.stringify(data.detail)
+    }
+    if (typeof data.code === "string") {
+      code = data.code
     }
   } catch {
     // Body was not JSON; fall through to the status text.
@@ -124,6 +134,7 @@ async function readRefusal(
     detail,
     message:
       message ?? (response.statusText || `Request failed (${response.status})`),
+    code,
   }
 }
 
@@ -298,16 +309,22 @@ export async function startOAuthSignIn(
 
 // Finish an OAuth sign-in: spend the authorization code for a session cookie.
 //
-// The code travels alone. The redirect URI is the gateway's own, derived from
-// its configured public base URL rather than sent from here, and the `state`
-// was already checked in this browser against the value it stored: posting it
-// would only let the gateway compare a value to itself.
+// No redirect URI: the gateway derives its own from its configured public base
+// URL. `terms_accepted` says whether the person accepted the published terms
+// before leaving, which a sign-in that creates their account needs; the gateway
+// ignores it otherwise. A refusal for want of them throws an `ApiError` whose
+// `code` is `terms_not_accepted`.
 export async function completeOAuthSignIn(
   provider: string,
   code: string,
   state: string,
+  termsAccepted: boolean,
 ): Promise<SignInResult> {
-  const payload: OAuthCallbackRequest = { code, state }
+  const payload: OAuthCallbackRequest = {
+    code,
+    state,
+    terms_accepted: termsAccepted,
+  }
   const finished = await publicPost(
     `/auth/oauth/${encodeURIComponent(provider)}/callback`,
     payload,
@@ -401,7 +418,8 @@ async function publicPost(
     }
   }
   if (!response.ok) {
-    throw new ApiError(response.status, await extractErrorMessage(response))
+    const refusal = await readRefusal(response)
+    throw new ApiError(response.status, refusal.message, refusal.code)
   }
   return {
     isOk: true,

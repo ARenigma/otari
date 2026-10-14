@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { errorMessage } from "@/design-system/feedback/errorMessage"
 import { useAuth } from "@/features/auth/AuthContext"
 import { ApiError, completeOAuthSignIn } from "@/shared/api/client"
+import { useDeployment } from "@/shared/hooks/useDeployment"
 import {
   analyticsErrorCode,
   analyticsStatusCode,
@@ -9,36 +10,14 @@ import {
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
 
+import { OAuthTermsStep } from "./OAuthTermsStep"
 import { oauthProviderLabel } from "./oauthProviders"
+import { takeOAuthState } from "./oauthRoundTrip"
 import {
   goToPublicAuthPage,
   PublicAuthLayout,
   PublicAuthLink,
 } from "./PublicAuthLayout"
-
-/**
- * Where the CSRF `state` waits while the browser is away at the provider.
- *
- * `sessionStorage` and not `localStorage`: the value is scoped to the tab that
- * started the flow and dies with it, so a stale state cannot outlive the tab or
- * be read by a second one. The gateway keeps no copy at all, which is the same
- * reason PKCE stays off there (`src/gateway/services/oauth_service.py`): a
- * value minted at authorize time has nowhere server-side to live until the
- * exchange, so the browser holds it and this page is what checks it.
- */
-const STATE_KEY = "otari.oauth.state"
-
-/** Remember the state for the provider round trip about to start. */
-export function rememberOAuthState(state: string): void {
-  window.sessionStorage.setItem(STATE_KEY, state)
-}
-
-/** Take the remembered state, clearing it so one value answers one callback. */
-function takeOAuthState(): string | null {
-  const stored = window.sessionStorage.getItem(STATE_KEY)
-  window.sessionStorage.removeItem(STATE_KEY)
-  return stored
-}
 
 /**
  * The page a provider's redirect lands on, which finishes an OAuth sign-in.
@@ -61,11 +40,16 @@ function takeOAuthState(): string | null {
  * - There is no code. A callback without one has nothing to spend.
  * - Otherwise the code is posted to the gateway, which exchanges it and sets
  *   the session cookie. On success this signs in exactly the way the password
- *   and passkey screens do, through `useAuth().login()`.
+ *   and passkey screens do, through `useAuth().login()`. The acceptance of the
+ *   published terms goes with it when the page that started the flow took one.
  *
  * Not a form and not retryable: an authorization code is single-use, so a
  * failure sends the person back to the sign-in screen to start again rather
- * than offering a button that would spend a spent code.
+ * than offering a button that would spend a spent code. The one exception is a
+ * sign-in that would create the account on a deployment that publishes terms
+ * and arrived without their acceptance (`terms_not_accepted`): that asks for
+ * the terms here and starts a fresh round trip with the provider, rather than
+ * leaving somebody who did nothing wrong at a dead end.
  *
  * Both endings leave this page, and both have to: `DeploymentRoot` picks a
  * public auth path off the hash ahead of the auth gate, so this page keeps
@@ -82,7 +66,9 @@ export function OAuthCallbackPage({
 }) {
   const { login } = useAuth()
   const { recordEvent } = useTelemetry()
+  const { terms_url } = useDeployment()
   const [failure, setFailure] = useState<string>()
+  const [needsTerms, setNeedsTerms] = useState(false)
   // The effect below signs somebody in, so it must run once and not once per
   // render. React's development StrictMode mounts an effect twice on purpose,
   // and the second run would post a code the first already spent, turning every
@@ -97,7 +83,7 @@ export function OAuthCallbackPage({
 
     const label = oauthProviderLabel(provider)
     const params = new URLSearchParams(hash.split("?")[1] ?? "")
-    const expectedState = takeOAuthState()
+    const remembered = takeOAuthState()
     const providerError = params.get("error")
     const state = params.get("state")
     const code = params.get("code")
@@ -123,7 +109,7 @@ export function OAuthCallbackPage({
       )
       return
     }
-    if (!state || state !== expectedState) {
+    if (!state || state !== remembered.state) {
       refuse(
         `That ${label} sign-in did not start in this tab, so it was not completed. Start again from the sign-in screen.`,
         "invalid_state",
@@ -140,7 +126,12 @@ export function OAuthCallbackPage({
 
     void (async () => {
       try {
-        const result = await completeOAuthSignIn(provider, code, state)
+        const result = await completeOAuthSignIn(
+          provider,
+          code,
+          state,
+          remembered.termsAccepted,
+        )
         if (result.isOk) {
           recordEvent(TELEMETRY_EVENTS.LOGIN_SUCCESS, {
             authentication_method: provider,
@@ -167,6 +158,9 @@ export function OAuthCallbackPage({
           error_code: analyticsErrorCode(caught),
           status: caught instanceof ApiError ? caught.status : undefined,
         })
+        setNeedsTerms(
+          caught instanceof ApiError && caught.code === "terms_not_accepted",
+        )
         setFailure(errorMessage(caught))
       }
     })()
@@ -185,6 +179,12 @@ export function OAuthCallbackPage({
         </p>
       </PublicAuthLayout>
     )
+  }
+
+  // Only where this tab knows which terms to show; a bootstrap that names none
+  // falls back to the gateway's own wording below.
+  if (needsTerms && terms_url !== null) {
+    return <OAuthTermsStep provider={provider} termsUrl={terms_url} />
   }
 
   return (

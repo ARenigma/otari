@@ -296,10 +296,95 @@ describe("AcceptInvitationPage", () => {
       }),
     )
 
+    // The providers are offered here, so the sign-in that follows is started
+    // from the page that holds what it has to carry.
     expect(
-      await screen.findByText(/Sign in with one of the providers/),
-    ).toBeInTheDocument()
+      await screen.findByRole("button", { name: "Sign in with Google" }),
+    ).toBeEnabled()
     expect(accepted).toEqual([{ token: "abc123" }])
+  })
+
+  describe("where the deployment publishes terms", () => {
+    const terms = {
+      mailReady: false,
+      oauthProviders: ["google"],
+      termsUrl: "https://otari.example.com/terms",
+    }
+    const realLocation = window.location
+
+    afterEach(() => {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: realLocation,
+      })
+    })
+
+    it("holds the provider way in until the terms are accepted", async () => {
+      const accepted = mockApi({ needsPassword: true })
+      const user = userEvent.setup()
+      renderPage("#/accept-invitation?token=abc123", terms)
+
+      const instead = await screen.findByRole("button", {
+        name: "Accept and sign in with a provider instead",
+      })
+      expect(instead).toBeDisabled()
+      await user.click(instead)
+      expect(accepted).toEqual([])
+
+      await user.click(
+        screen.getByRole("checkbox", { name: "I accept the terms of service" }),
+      )
+      await user.click(instead)
+
+      await screen.findByRole("button", { name: "Sign in with Google" })
+      expect(accepted).toEqual([{ token: "abc123", terms_accepted: true }])
+    })
+
+    it("carries the accepted terms into the provider round trip", async () => {
+      mockApi({ needsPassword: true })
+      const assign = vi.fn()
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: { ...window.location, assign, hash: "" },
+      })
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            authorization_url: "https://accounts.google.com/o/oauth2/auth?x=1",
+            state: "the-state",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      const user = userEvent.setup()
+      renderPage("#/accept-invitation?token=abc123", terms)
+
+      await user.click(
+        await screen.findByRole("checkbox", {
+          name: "I accept the terms of service",
+        }),
+      )
+      await user.click(
+        screen.getByRole("button", {
+          name: "Accept and sign in with a provider instead",
+        }),
+      )
+      await user.click(
+        await screen.findByRole("button", { name: "Sign in with Google" }),
+      )
+
+      await vi.waitFor(() =>
+        expect(assign).toHaveBeenCalledWith(
+          "https://accounts.google.com/o/oauth2/auth?x=1",
+        ),
+      )
+      expect(window.sessionStorage.getItem("otari.oauth.state")).toBe(
+        "the-state",
+      )
+      expect(window.sessionStorage.getItem("otari.oauth.terms-accepted")).toBe(
+        "true",
+      )
+    })
   })
 
   it("offers no provider route where the deployment has none", async () => {

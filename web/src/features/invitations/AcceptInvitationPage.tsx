@@ -30,6 +30,8 @@ import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { InfoBanner } from "@/design-system/feedback/InfoBanner"
 import { useAuth } from "@/features/auth/AuthContext"
 import { LoginPageShell } from "@/features/auth/LoginPageShell"
+import { OAuthContinueRows } from "@/features/auth/OAuthContinueRows"
+import { renderableOAuthProviders } from "@/features/auth/oauthProviders"
 import {
   goToPublicAuthPage,
   PublicAuthLink,
@@ -113,7 +115,8 @@ export function AcceptInvitationPage() {
   // A provider-verified address resolves a rostered identity that has no
   // password (`adapters/identity_provider_adapter.py`), so where there is a
   // provider, setting a password here is one way in rather than the only one.
-  const offersProviderSignIn = deployment.oauth_providers.length > 0
+  const providers = renderableOAuthProviders(deployment.oauth_providers)
+  const offersProviderSignIn = providers.length > 0
 
   return (
     <LoginPageShell>
@@ -159,6 +162,22 @@ export function AcceptInvitationPage() {
                 Go to the dashboard
               </Button>
             </>
+          ) : !accept.data.password_set &&
+            !accept.data.verification_pending &&
+            preview.data?.needs_password &&
+            offersProviderSignIn ? (
+            // "Sign in with a provider instead": the providers are offered
+            // here rather than on the sign-in screen, so the terms accepted
+            // above travel with the sign-in that is this address's first.
+            <>
+              <p className="text-center text-xs text-muted">
+                Sign in with your provider to get started.
+              </p>
+              <OAuthContinueRows
+                providers={providers}
+                termsAccepted={accept.variables?.terms_accepted === true}
+              />
+            </>
           ) : (
             <>
               <p className="text-center text-xs text-muted">
@@ -166,9 +185,7 @@ export function AcceptInvitationPage() {
                   ? `Your password is set. Sign in as ${preview.data?.email ?? "the invited address"} to get started.`
                   : accept.data.verification_pending
                     ? `Verify ${preview.data?.email ?? "the invited address"} first: open the verification link we emailed when you signed up, then sign in.`
-                    : preview.data?.needs_password && offersProviderSignIn
-                      ? "Sign in with one of the providers on the sign-in screen to get started."
-                      : "Sign in to get started."}
+                    : "Sign in to get started."}
               </p>
               <Button
                 variant="primary"

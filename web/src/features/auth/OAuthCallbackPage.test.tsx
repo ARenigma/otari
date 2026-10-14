@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { StrictMode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -91,10 +92,12 @@ describe("OAuthCallbackPage", () => {
     expect(url).toBe(`${API_ROOT}/auth/oauth/google/callback`)
     // The code and the state, and no redirect URI: that one is the gateway's
     // own. The state goes back so the gateway can check it against the pending
-    // authorization it recorded, which is the half this tab cannot do.
+    // authorization it recorded, which is the half this tab cannot do. No terms
+    // were accepted before this flow left, so none are claimed.
     expect(JSON.parse(String(init?.body))).toEqual({
       code: "the-code",
       state: "the-state",
+      terms_accepted: false,
     })
     await waitFor(() =>
       expect(recordEvent).toHaveBeenCalledWith(TELEMETRY_EVENTS.LOGIN_SUCCESS, {
@@ -203,6 +206,120 @@ describe("OAuthCallbackPage", () => {
       await screen.findByText(/not registered on this gateway/),
     ).toBeInTheDocument()
     expect(screen.queryByText("SIGNED IN")).toBeNull()
+  })
+
+  describe("on a deployment that publishes terms", () => {
+    const TERMS_KEY = "otari.oauth.terms-accepted"
+    const realLocation = window.location
+
+    function renderWithTerms(hash: string) {
+      return render(
+        <AppProviders>
+          <DeploymentProvider
+            value={bootstrap({
+              oauth_providers: ["google"],
+              terms_url: "https://otari.example.com/terms",
+            })}
+          >
+            <Harness hash={hash} />
+          </DeploymentProvider>
+        </AppProviders>,
+      )
+    }
+
+    const termsRefusal = () =>
+      jsonResponse(
+        {
+          detail: "Accept the terms of service to continue",
+          code: "terms_not_accepted",
+        },
+        400,
+      )
+
+    afterEach(() => {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: realLocation,
+      })
+    })
+
+    it("sends the acceptance the page that started the flow took, once", async () => {
+      window.sessionStorage.setItem(STATE_KEY, "the-state")
+      window.sessionStorage.setItem(TERMS_KEY, "true")
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ expires_at: "2026-09-01T00:00:00Z" }))
+
+      renderWithTerms("#/auth/google/callback?code=the-code&state=the-state")
+
+      expect(await screen.findByText("SIGNED IN")).toBeInTheDocument()
+      const [, init] = fetchMock.mock.calls[0] ?? []
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        terms_accepted: true,
+      })
+      expect(window.sessionStorage.getItem(TERMS_KEY)).toBeNull()
+    })
+
+    it("asks for the terms a new account needs instead of ending at a refusal", async () => {
+      window.sessionStorage.setItem(STATE_KEY, "the-state")
+      const assign = vi.fn()
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: { ...realLocation, assign },
+      })
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(termsRefusal())
+        .mockResolvedValueOnce(
+          jsonResponse({
+            authorization_url: "https://accounts.google.com/o/oauth2/auth?x=1",
+            state: "the-next-state",
+          }),
+        )
+      const user = userEvent.setup()
+
+      renderWithTerms("#/auth/google/callback?code=the-code&state=the-state")
+
+      expect(
+        await screen.findByRole("heading", {
+          name: "Accept the terms to continue",
+        }),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole("link", { name: "terms of service" }),
+      ).toHaveAttribute("href", "https://otari.example.com/terms")
+      const again = screen.getByRole("button", { name: "Sign in with Google" })
+      expect(again).toBeDisabled()
+
+      await user.click(
+        screen.getByRole("checkbox", { name: "I accept the terms of service" }),
+      )
+      await user.click(again)
+
+      await waitFor(() =>
+        expect(assign).toHaveBeenCalledWith(
+          "https://accounts.google.com/o/oauth2/auth?x=1",
+        ),
+      )
+      // A fresh round trip, which this time carries the acceptance back.
+      expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+        `${API_ROOT}/auth/oauth/google/authorize`,
+      )
+      expect(window.sessionStorage.getItem(STATE_KEY)).toBe("the-next-state")
+      expect(window.sessionStorage.getItem(TERMS_KEY)).toBe("true")
+    })
+
+    it("falls back to the gateway's wording where this tab knows no terms", async () => {
+      window.sessionStorage.setItem(STATE_KEY, "the-state")
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(termsRefusal())
+
+      renderCallback("#/auth/google/callback?code=the-code&state=the-state")
+
+      expect(
+        await screen.findByText("Accept the terms of service to continue"),
+      ).toBeInTheDocument()
+      expect(screen.queryByRole("checkbox")).toBeNull()
+    })
   })
 
   it("spends the code once under StrictMode, which mounts every effect twice", async () => {
