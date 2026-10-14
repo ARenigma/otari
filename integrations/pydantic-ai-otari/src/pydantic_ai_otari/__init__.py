@@ -7,8 +7,8 @@ from pydantic_ai_otari import OtariModel
 agent = Agent(OtariModel("anthropic:claude-sonnet-4-6"))
 ```
 
-`OTARI_BASE_URL` and `OTARI_API_KEY` configure the gateway, unless passed to
-`OtariProvider` directly.
+`OTARI_API_KEY` is the key, and `OTARI_BASE_URL` a self-hosted gateway's API root
+(otari.ai's gateway when unset), unless passed to `OtariProvider` directly.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 __all__ = ["DEFAULT_BASE_URL", "OtariModel", "OtariProvider"]
 
-DEFAULT_BASE_URL = "http://localhost:8000/api/v1"
+DEFAULT_BASE_URL = "https://api.otari.ai/api/v1"
 
 # Otari names a model `provider:model` (or `provider/model`); the provider part
 # says which family's capabilities apply, whatever API Otari reaches it through.
@@ -81,7 +81,7 @@ class OtariProvider(OpenAIProvider):
 
         Args:
             base_url: The gateway's API root, ending in `/api/v1`. Defaults to
-                `OTARI_BASE_URL`, then to a gateway on localhost.
+                `OTARI_BASE_URL`, then to otari.ai's gateway.
             api_key: An Otari API key or user token. Defaults to `OTARI_API_KEY`.
             openai_client: A preconfigured client, used instead of the arguments above.
             http_client: The HTTP client to send requests with.

@@ -6,8 +6,8 @@ its budgets, usage tracking, fallback routing and guardrails on every model call
 
 ```bash
 pip install pydantic-ai-otari
-export OTARI_BASE_URL=http://localhost:8000/api/v1   # your gateway's URL plus /api/v1
-export OTARI_API_KEY=<your-otari-key>
+export OTARI_API_KEY=<your-otari-key>                # from otari.ai, or from your own gateway
+export OTARI_BASE_URL=http://localhost:8000/api/v1   # only for a self-hosted gateway: its URL plus /api/v1
 ```
 
 ```python
@@ -22,8 +22,8 @@ print(agent.run_sync("Say hello in one sentence.").output)
   or the name of a routing policy or alias. The provider part also selects the
   model's capabilities in Pydantic AI, so a Claude model is treated as one.
 - `OtariProvider(base_url=..., api_key=...)` configures the gateway in code;
-  pass it as `OtariModel(..., provider=...)`. `OTARI_BASE_URL` defaults to
-  `http://localhost:8000/api/v1`.
+  pass it as `OtariModel(..., provider=...)`. Without `OTARI_BASE_URL`, requests
+  go to otari.ai's gateway, `https://api.otari.ai/api/v1`.
 - `OPENAI_API_KEY` is never used as a fallback, so an OpenAI key is not sent to
   the gateway by mistake.
 

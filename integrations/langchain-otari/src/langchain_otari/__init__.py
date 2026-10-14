@@ -6,8 +6,9 @@ from langchain_otari import ChatOtari
 llm = ChatOtari(model="anthropic:claude-sonnet-4-6")
 ```
 
-`OTARI_BASE_URL` and `OTARI_API_KEY` configure the gateway, unless passed as
-`base_url` and `api_key`. LangGraph takes the model like any other chat model.
+`OTARI_API_KEY` is the key, and `OTARI_BASE_URL` a self-hosted gateway's API root
+(otari.ai's gateway when unset), unless passed as `base_url` and `api_key`.
+LangGraph takes the model like any other chat model.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from pydantic import model_validator
 
 __all__ = ["DEFAULT_BASE_URL", "ChatOtari"]
 
-DEFAULT_BASE_URL = "http://localhost:8000/api/v1"
+DEFAULT_BASE_URL = "https://api.otari.ai/api/v1"
 
 
 class ChatOtari(ChatOpenAI):

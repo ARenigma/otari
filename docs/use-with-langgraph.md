@@ -13,11 +13,17 @@ Install LangGraph and the package:
 pip install langgraph langchain-otari
 ```
 
-Export where your gateway is and the key it gave you:
+Create an API key at [otari.ai](https://otari.ai) and export it:
+
+```bash
+export OTARI_API_KEY=<your-otari-key>
+```
+
+That is all the configuration otari.ai's gateway needs. For a gateway you run
+yourself, use a key it issued and also export its API root:
 
 ```bash
 export OTARI_BASE_URL=http://localhost:8000/api/v1   # your gateway's URL plus /api/v1
-export OTARI_API_KEY=<your-otari-key>                # standalone API key, or tk_ user token
 ```
 
 ## A tool-calling graph

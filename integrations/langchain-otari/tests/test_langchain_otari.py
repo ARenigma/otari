@@ -28,7 +28,7 @@ def test_arguments_win_over_the_environment(monkeypatch: pytest.MonkeyPatch) -> 
     assert llm.root_client.api_key == "explicit-key"
 
 
-def test_defaults_to_a_local_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_defaults_to_otari_ai(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTARI_API_KEY", "otari-key")
     assert ChatOtari(model="openai:gpt-4o").openai_api_base == DEFAULT_BASE_URL
 

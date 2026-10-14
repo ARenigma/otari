@@ -14,11 +14,17 @@ Install the package:
 pip install pydantic-ai-otari
 ```
 
-Export where your gateway is and the key it gave you:
+Create an API key at [otari.ai](https://otari.ai) and export it:
+
+```bash
+export OTARI_API_KEY=<your-otari-key>
+```
+
+That is all the configuration otari.ai's gateway needs. For a gateway you run
+yourself, use a key it issued and also export its API root:
 
 ```bash
 export OTARI_BASE_URL=http://localhost:8000/api/v1   # your gateway's URL plus /api/v1
-export OTARI_API_KEY=<your-otari-key>                # standalone API key, or tk_ user token
 ```
 
 Then give your agent an `OtariModel`:
@@ -33,10 +39,9 @@ result = agent.run_sync("Say hello in one sentence.")
 print(result.output)
 ```
 
-`OTARI_BASE_URL` is the Otari API root, `/api/v1`, and defaults to
-`http://localhost:8000/api/v1`. Use your self-hosted gateway's URL plus `/api/v1`,
-or `https://api.otari.ai/api/v1` for otari.ai's own gateway. To configure it in
-code instead, pass a provider: `OtariModel("openai:gpt-4o", provider=OtariProvider(base_url=..., api_key=...))`.
+Without `OTARI_BASE_URL`, requests go to otari.ai's gateway,
+`https://api.otari.ai/api/v1`. To configure the gateway in code instead, pass a
+provider: `OtariModel("openai:gpt-4o", provider=OtariProvider(base_url=..., api_key=...))`.
 `OtariProvider` never falls back to `OPENAI_API_KEY`, so an OpenAI key in your
 environment is not sent to the gateway by mistake.
 
@@ -113,15 +118,17 @@ asyncio.run(main())
 
 ## Choosing a model
 
-The model name is whatever your deployment routes:
+The model name is whatever your gateway routes. The examples on this page use
+`openai:gpt-4o`, which needs an OpenAI key on the gateway.
 
-- **Standalone, any configured provider:** `provider:model`, for example
-  `openai:gpt-4o`, `anthropic:claude-sonnet-4-6` or `mistral:mistral-large-latest`.
+- **On otari.ai:** a managed model, `mzai:<catalog-id>` such as
+  `mzai:moonshotai/Kimi-K2.6`, or `provider:model` for a provider whose key your
+  organization has added, such as `anthropic:claude-sonnet-4-6`.
+- **On your own gateway:** `provider:model` for any provider it is configured
+  with, for example `openai:gpt-4o` or `mistral:mistral-large-latest`.
 - **A routing policy or alias:** its name, for example `OtariModel("support-agent")`.
   Otari picks the candidate and falls over to the next on failure, so the agent
   code does not change when the policy does. See [Routing](routing.md).
-- **Connected to otari.ai, managed models:** `mzai:<catalog-id>`, for example
-  `mzai:moonshotai/Kimi-K2.6`, through otari.ai's own gateway.
 
 ## One key per project
 
@@ -142,7 +149,10 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-otari = OpenAIProvider(base_url=os.environ["OTARI_BASE_URL"], api_key=os.environ["OTARI_API_KEY"])
+otari = OpenAIProvider(
+    base_url=os.environ.get("OTARI_BASE_URL", "https://api.otari.ai/api/v1"),
+    api_key=os.environ["OTARI_API_KEY"],
+)
 agent = Agent(OpenAIChatModel("openai:gpt-4o", provider=otari))
 
 print(agent.run_sync("Say hello in one sentence.").output)

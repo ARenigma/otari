@@ -7,8 +7,8 @@ its budgets, usage tracking, fallback routing and guardrails on every model call
 
 ```bash
 pip install langchain-otari
-export OTARI_BASE_URL=http://localhost:8000/api/v1   # your gateway's URL plus /api/v1
-export OTARI_API_KEY=<your-otari-key>
+export OTARI_API_KEY=<your-otari-key>                # from otari.ai, or from your own gateway
+export OTARI_BASE_URL=http://localhost:8000/api/v1   # only for a self-hosted gateway: its URL plus /api/v1
 ```
 
 ```python
@@ -23,8 +23,8 @@ print(llm.invoke("Say hello in one sentence.").content)
   `with_structured_output`, `bind_tools`, LangGraph nodes.
 - `model` is any model your gateway routes: `provider:model`, or the name of a
   routing policy or alias.
-- `base_url` and `api_key` override the environment. `OTARI_BASE_URL` defaults to
-  `http://localhost:8000/api/v1`.
+- `base_url` and `api_key` override the environment. Without `OTARI_BASE_URL`,
+  requests go to otari.ai's gateway, `https://api.otari.ai/api/v1`.
 - `OPENAI_API_KEY` is never used as a fallback, so an OpenAI key is not sent to
   the gateway by mistake. Token usage is requested on streams too.
 

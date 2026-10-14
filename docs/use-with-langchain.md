@@ -14,11 +14,17 @@ Install the package:
 pip install langchain-otari
 ```
 
-Export where your gateway is and the key it gave you:
+Create an API key at [otari.ai](https://otari.ai) and export it:
+
+```bash
+export OTARI_API_KEY=<your-otari-key>
+```
+
+That is all the configuration otari.ai's gateway needs. For a gateway you run
+yourself, use a key it issued and also export its API root:
 
 ```bash
 export OTARI_BASE_URL=http://localhost:8000/api/v1   # your gateway's URL plus /api/v1
-export OTARI_API_KEY=<your-otari-key>                # standalone API key, or tk_ user token
 ```
 
 Then create the chat model:
@@ -31,12 +37,11 @@ llm = ChatOtari(model="openai:gpt-4o")
 print(llm.invoke("Say hello in one sentence.").content)
 ```
 
-`OTARI_BASE_URL` is the Otari API root, `/api/v1`, and defaults to
-`http://localhost:8000/api/v1`. Use your self-hosted gateway's URL plus `/api/v1`,
-or `https://api.otari.ai/api/v1` for otari.ai's own gateway. `base_url` and
-`api_key` arguments override both variables. `ChatOtari` never falls back to
-`OPENAI_API_KEY`, so an OpenAI key in your environment is not sent to the gateway
-by mistake, and it asks Otari for token usage on streams too.
+Without `OTARI_BASE_URL`, requests go to otari.ai's gateway,
+`https://api.otari.ai/api/v1`. `base_url` and `api_key` arguments override both
+variables. `ChatOtari` never falls back to `OPENAI_API_KEY`, so an OpenAI key in
+your environment is not sent to the gateway by mistake, and it asks Otari for
+token usage on streams too.
 
 `ChatOtari` takes every `ChatOpenAI` argument and works for every provider Otari
 routes to: Otari translates the Chat Completions request for Anthropic, Mistral,
@@ -113,7 +118,7 @@ from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
     model="openai:gpt-4o",
-    base_url=os.environ["OTARI_BASE_URL"],
+    base_url=os.environ.get("OTARI_BASE_URL", "https://api.otari.ai/api/v1"),
     api_key=os.environ["OTARI_API_KEY"],
     stream_usage=True,
 )

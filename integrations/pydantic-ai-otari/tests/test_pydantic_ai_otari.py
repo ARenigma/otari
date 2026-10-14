@@ -30,7 +30,7 @@ def test_arguments_win_over_the_environment(monkeypatch: pytest.MonkeyPatch) -> 
     assert provider.client.api_key == "explicit-key"
 
 
-def test_defaults_to_a_local_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_defaults_to_otari_ai(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTARI_API_KEY", "otari-key")
     assert OtariProvider().base_url == DEFAULT_BASE_URL + "/"
 
