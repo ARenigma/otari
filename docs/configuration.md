@@ -876,7 +876,9 @@ laptop.
 Mail is optional. An invitation that is not emailed returns its accept link, and an invitee new
 to the deployment chooses a password on the page it opens, so members can join
 a deployment with no transport configured. Without mail, signup, email verification, and password
-reset are unavailable.
+reset are unavailable. A member who forgot their password gets back in through a password link an
+operator creates from the dashboard's Accounts page and shares with them, or by signing in with a
+provider where one is configured.
 
 SMTP needs the deployment's public URL, a host, and a sender:
 

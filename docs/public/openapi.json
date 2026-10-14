@@ -9601,6 +9601,12 @@
             "title": "Expires At",
             "type": "string"
           },
+          "password_removed": {
+            "default": false,
+            "description": "Whether this sign-in removed a password the account held: the first provider sign-in on an address nobody had proven removes the password set before then. The person can set a new one from Account settings.",
+            "title": "Password Removed",
+            "type": "boolean"
+          },
           "user_id": {
             "description": "The identity this session speaks for.",
             "format": "uuid",
@@ -12560,6 +12566,40 @@
           "active_organization_id"
         ],
         "title": "PasskeySessionResponse",
+        "type": "object"
+      },
+      "PasswordLinkPublic": {
+        "description": "A single-use link that sets an account's password, and whether it was mailed.",
+        "properties": {
+          "expires_at": {
+            "description": "When the link stops working.",
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The link to pass on to the account's owner yourself, set only when mail_sent is false. Choosing a password through it records the address as vouched for rather than proven, since the mailbox never saw the link.",
+            "title": "Link"
+          },
+          "mail_sent": {
+            "description": "Whether the link was mailed to the account's address. False when this deployment cannot mail links, or the send failed.",
+            "title": "Mail Sent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mail_sent",
+          "expires_at"
+        ],
+        "title": "PasswordLinkPublic",
         "type": "object"
       },
       "PasswordResponse": {
@@ -17004,7 +17044,7 @@
                 "type": "null"
               }
             ],
-            "description": "The address to sign in with. Required when the identity has none, which is the state first boot leaves the operator in, including when the master key is what authenticates the call. Resubmitting the address the identity already holds is accepted and ignored; only a *different* address is refused, because changing one is not supported yet.",
+            "description": "The address to sign in with. Required when the identity has none, which is the state first boot leaves the operator in, including when the master key is what authenticates the call. Resubmitting the address the identity already holds is accepted and ignored; only a *different* address is refused, because changing one is not supported yet. It is always the caller's own address, the operator's when the master key authenticates the call, and never names another account.",
             "title": "Email"
           },
           "new_password": {
@@ -23146,6 +23186,58 @@
         ]
       }
     },
+    "/api/v1/admin/users/{user_id}/password-link": {
+      "post": {
+        "description": "Give an account a single-use link that sets its password, for someone who cannot sign in.\n\nWhere this deployment can mail links, the link goes to the account's address and is not returned, the\nsame as \"Forgot your password?\". Where it cannot, or the send fails, the response carries the link for\nyou to pass on, which is how a member who forgot their password gets back in on a deployment without\nmail. A password chosen through a link that was not mailed records the address as vouched for rather\nthan proven. A new link replaces any earlier reset link for the account.\n\nRefused with 409 for a deactivated account, one with no address, one that has no password and signs in\nwith a provider or a passkey (its owner adds a password once signed in), and, where open_signup is\ndisabled, an unverified address no organization still has as a member or invitee.",
+        "operationId": "admin-issue_password_link",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordLinkPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Issue Password Link",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/agent-telemetry": {
       "delete": {
         "description": "Delete agent_telemetry rows by explicit ids or by filter (standalone).\n\nTarget either an explicit selection (`ids`) or everything matching a filter\n(`by_filter: true` plus optional `user_id` / `api_key_id` / `name` / date\nrange). A selection matching zero rows succeeds with `deleted: 0`.\nMaster-key only.",
@@ -24099,7 +24191,7 @@
     },
     "/api/v1/auth/password": {
       "put": {
-        "description": "Set or change the password the caller signs in to the dashboard with.\n\nAlways the caller's own identity. Supply ``email`` when it has no sign-in\naddress yet, which is the state first boot leaves the operator in, and\n``current_password`` when it already has a password and the request is\nauthenticated by the session cookie. The master key in a header is what\nexcuses ``current_password``, which is how a forgotten password is\nrecovered; it does not excuse ``email``, because an identity with no address\nhas nothing to sign in with whoever is asking. The operator setting a password\nfor the first time retires master-key sign-in on this deployment.\n\nEvery other session this identity holds ends, the caller's own excepted, so\na cookie stolen before the change does not outlive it.",
+        "description": "Set or change the password the caller signs in to the dashboard with.\n\nAlways the caller's own identity. Supply ``email`` when it has no sign-in\naddress yet, which is the state first boot leaves the operator in, and\n``current_password`` when it already has a password and the request is\nauthenticated by the session cookie. The master key in a header is what\nexcuses ``current_password``, which is how a forgotten password is\nrecovered; it does not excuse ``email``, because an identity with no address\nhas nothing to sign in with whoever is asking. The operator setting a password\nfor the first time retires master-key sign-in on this deployment.\n\nWith the master key the caller is the deployment's operator, so an ``email``\nsent then is the operator's own sign-in address: on an unclaimed deployment it\nclaims the deployment with that address. This never sets another account's\npassword; an address another account holds is refused with 409. To help a\nmember who forgot their password, send them a link with\n``POST /api/v1/admin/users/{user_id}/password-link``.\n\nEvery other session this identity holds ends, the caller's own excepted, so\na cookie stolen before the change does not outlive it.",
         "operationId": "auth-set_dashboard_password",
         "requestBody": {
           "content": {

@@ -414,6 +414,27 @@ async def get_session_identity(
         ) from exc
 
 
+def refuse_ended_session(request: Request, config: GatewayConfig) -> None:
+    """Refuse a request whose only credential is a session cookie that no longer authenticates.
+
+    Called once ``get_session_identity`` has answered None. Without this the caller would be told it sent no
+    API key header, which describes an API client rather than a browser whose session ended (it was revoked,
+    expired, or its account deactivated). A cookie refused for being cross-site is left to the usual answer.
+    """
+    if (
+        config.is_hybrid_mode
+        or _header_credentials_present(request)
+        or not request.cookies.get(SESSION_COOKIE_NAME)
+        or not cookie_may_authenticate(request, config)
+    ):
+        return
+    record_auth_failure("session_ended")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Your dashboard session has ended. Sign in again.",
+    )
+
+
 async def is_valid_master_key(token: str, config: GatewayConfig, db: AsyncSession) -> bool:
     """Check if token matches the configured key or the current generated key."""
     if config.master_key is not None and secrets.compare_digest(token, config.master_key):
@@ -523,6 +544,7 @@ async def verify_master_key(
     """
     if session_identity is not None:
         return None
+    refuse_ended_session(request, config)
     token = extract_credential_token(request)
 
     if config.master_key is None:
@@ -669,6 +691,7 @@ async def verify_catalog_reader(
     """
     if session_identity is not None:
         return None, True
+    refuse_ended_session(request, config)
     return await verify_api_key_or_master_key(request, db, config)
 
 
@@ -1325,6 +1348,9 @@ def get_identity_service(
         sign_in_listener=DomainAutoJoinListener(OrganizationDomainRepository(uow), OrganizationMemberRepository(uow)),
         session_ttl_hours=config.dashboard_session_ttl_hours,
         terms_url=config.terms_url,
+        mailer=Mailer(config),
+        open_signup=config.open_signup,
+        password_reset_expiry_hours=config.password_reset_expiry_hours,
     )
 
 

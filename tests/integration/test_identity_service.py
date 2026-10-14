@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
 from gateway.adapters.identity_provider_adapter import DeploymentIdentityProviderAdapter
+from gateway.core.config import GatewayConfig
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.identity_exceptions import (
     OAuthIdentityLinkConflictError,
@@ -21,6 +22,7 @@ from gateway.ports.identity_provider_port import IdentityProviderPort, IdentityR
 from gateway.repositories.identity import IdentityRepositories, OAuthIdentityLinkRepository
 from gateway.repositories.tenancy import OrganizationDomainRepository, OrganizationMemberRepository, UserRepository
 from gateway.services.identity import IdentityService
+from gateway.services.mail import Mailer
 from gateway.services.tenancy import DomainAutoJoinListener, OrganizationService, forget_unproven_access
 from gateway.services.tenancy.workspace_listener import NullWorkspaceListener
 
@@ -43,6 +45,9 @@ def _service_with(
         sign_in_listener=DomainAutoJoinListener(OrganizationDomainRepository(uow), OrganizationMemberRepository(uow)),
         session_ttl_hours=1,
         terms_url=terms_url,
+        mailer=Mailer(GatewayConfig(mail_transport="none")),
+        open_signup=False,
+        password_reset_expiry_hours=2,
     )
 
 

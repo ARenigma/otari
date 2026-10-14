@@ -241,7 +241,10 @@ def test_signup_cannot_set_a_password_on_a_verified_identity(tmp_path: Path) -> 
     assert response.status_code == 401
 
 
-def test_signup_on_a_verified_identity_writes_nothing(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_signup_on_a_verified_identity_writes_nothing_and_tells_the_owner_how_it_signs_in(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The response is the one any address gets; the mailbox learns it already has an account."""
     with _client(tmp_path) as client:
         _add_member(client, email="ada@example.com")
         _mark_verified_by_a_provider(tmp_path, email="ada@example.com")
@@ -255,9 +258,35 @@ def test_signup_on_a_verified_identity_writes_nothing(tmp_path: Path, caplog: py
 
         assert response.status_code == 200
         assert response.json() == _signup(client, email="nobody@example.com").json()
-        assert "mail:console" not in caplog.text
+        assert "You already have an Otari account" in caplog.text
+        assert "signs in with Google" in caplog.text
+        assert "token=" not in caplog.text
 
     assert _credentials(tmp_path, email="ada@example.com") == (None, None)
+
+
+def test_signup_on_a_verified_password_account_mails_its_owner_a_notice(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with _client(tmp_path) as client:
+        _add_member(client, email="ada@example.com")
+        token = _captured_verification_link(caplog, client, email="ada@example.com")
+        assert (
+            client.post(f"{API_ROOT}/auth/verify-email", json={"token": token, "password": PASSWORD}).status_code == 200
+        )
+
+        caplog.clear()
+        gateway_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.INFO, logger="gateway")
+        try:
+            again = _signup(client, email="ada@example.com", password="a-different-password")
+        finally:
+            gateway_logger.removeHandler(caplog.handler)
+
+        assert again.json() == _signup(client, email="nobody@example.com").json()
+        assert "You already have an Otari account" in caplog.text
+        assert "Forgot your password?" in caplog.text
+        assert "token=" not in caplog.text
 
 
 def test_signup_writes_nothing_when_the_address_is_verified_after_its_check(

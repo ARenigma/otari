@@ -86,6 +86,36 @@ export interface paths {
         patch: operations["admin-update_deployment_user"];
         trace?: never;
     };
+    "/api/v1/admin/users/{user_id}/password-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue Password Link
+         * @description Give an account a single-use link that sets its password, for someone who cannot sign in.
+         *
+         *     Where this deployment can mail links, the link goes to the account's address and is not returned, the
+         *     same as "Forgot your password?". Where it cannot, or the send fails, the response carries the link for
+         *     you to pass on, which is how a member who forgot their password gets back in on a deployment without
+         *     mail. A password chosen through a link that was not mailed records the address as vouched for rather
+         *     than proven. A new link replaces any earlier reset link for the account.
+         *
+         *     Refused with 409 for a deactivated account, one with no address, one that has no password and signs in
+         *     with a provider or a passkey (its owner adds a password once signed in), and, where open_signup is
+         *     disabled, an unverified address no organization still has as a member or invitee.
+         */
+        post: operations["admin-issue_password_link"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-telemetry": {
         parameters: {
             query?: never;
@@ -396,6 +426,13 @@ export interface paths {
          *     recovered; it does not excuse ``email``, because an identity with no address
          *     has nothing to sign in with whoever is asking. The operator setting a password
          *     for the first time retires master-key sign-in on this deployment.
+         *
+         *     With the master key the caller is the deployment's operator, so an ``email``
+         *     sent then is the operator's own sign-in address: on an unclaimed deployment it
+         *     claims the deployment with that address. This never sets another account's
+         *     password; an address another account holds is refused with 409. To help a
+         *     member who forgot their password, send them a link with
+         *     ``POST /api/v1/admin/users/{user_id}/password-link``.
          *
          *     Every other session this identity holds ends, the caller's own excepted, so
          *     a cookie stolen before the change does not outlive it.
@@ -10880,6 +10917,12 @@ export interface components {
              */
             expires_at: string;
             /**
+             * Password Removed
+             * @description Whether this sign-in removed a password the account held: the first provider sign-in on an address nobody had proven removes the password set before then. The person can set a new one from Account settings.
+             * @default false
+             */
+            password_removed: boolean;
+            /**
              * User Id
              * Format: uuid
              * @description The identity this session speaks for.
@@ -12362,6 +12405,28 @@ export interface components {
              * @description The identity this session speaks for.
              */
             user_id: string;
+        };
+        /**
+         * PasswordLinkPublic
+         * @description A single-use link that sets an account's password, and whether it was mailed.
+         */
+        PasswordLinkPublic: {
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When the link stops working.
+             */
+            expires_at: string;
+            /**
+             * Link
+             * @description The link to pass on to the account's owner yourself, set only when mail_sent is false. Choosing a password through it records the address as vouched for rather than proven, since the mailbox never saw the link.
+             */
+            link?: string | null;
+            /**
+             * Mail Sent
+             * @description Whether the link was mailed to the account's address. False when this deployment cannot mail links, or the send failed.
+             */
+            mail_sent: boolean;
         };
         /**
          * PasswordResponse
@@ -14489,7 +14554,7 @@ export interface components {
             current_password?: string | null;
             /**
              * Email
-             * @description The address to sign in with. Required when the identity has none, which is the state first boot leaves the operator in, including when the master key is what authenticates the call. Resubmitting the address the identity already holds is accepted and ignored; only a *different* address is refused, because changing one is not supported yet.
+             * @description The address to sign in with. Required when the identity has none, which is the state first boot leaves the operator in, including when the master key is what authenticates the call. Resubmitting the address the identity already holds is accepted and ignored; only a *different* address is refused, because changing one is not supported yet. It is always the caller's own address, the operator's when the master key authenticates the call, and never names another account.
              */
             email?: string | null;
             /**
@@ -16852,6 +16917,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentUserPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "admin-issue_password_link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordLinkPublic"];
                 };
             };
             /** @description Validation Error */

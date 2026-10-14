@@ -41,10 +41,13 @@ class IdentityResolution:
     ``new_account`` is true when this sign-in created the account, or is the
     first way in to one nobody had claimed. The caller reports it as a signup,
     and holds it to the terms the deployment publishes, so an adapter need not.
+    ``password_removed`` is true when this sign-in removed a password the account
+    held, so the caller can tell the person.
     """
 
     identity: User
     new_account: bool
+    password_removed: bool = False
 
 
 class IdentityProviderPort(Protocol):

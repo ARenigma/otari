@@ -232,6 +232,33 @@ def test_a_reset_token_is_refused_once_the_identity_is_deactivated(
         assert response.status_code == 400
 
 
+def _account_id(client: TestClient, *, email: str) -> str:
+    accounts = client.get(f"{API_ROOT}/admin/users", headers={"Otari-Key": MASTER_KEY}).json()["data"]
+    return str(next(row["id"] for row in accounts if row["email"] == email))
+
+
+def test_a_reset_link_minted_before_deactivation_stays_dead_after_reactivation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Deactivating an account clears its pending links, so reactivating it does not bring one back."""
+    with _client(tmp_path) as client:
+        _claimed_and_verified(client, caplog, email="ada@example.com")
+        _, log_text = _request_reset(client, caplog, email="ada@example.com")
+        token = _extract_token(log_text)
+        account_id = _account_id(client, email="ada@example.com")
+        for is_active in (False, True):
+            changed = client.patch(
+                f"{API_ROOT}/admin/users/{account_id}", json={"is_active": is_active}, headers={"Otari-Key": MASTER_KEY}
+            )
+            assert changed.status_code == 200, changed.text
+
+        response = client.post(
+            f"{API_ROOT}/auth/password/reset/confirm", json={"token": token, "new_password": NEW_PASSWORD}
+        )
+
+        assert response.status_code == 400
+
+
 def test_a_password_change_elsewhere_invalidates_an_outstanding_reset_token(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -295,9 +322,10 @@ def test_request_reset_for_a_deactivated_identity_sends_nothing(
         assert "mail:console" not in log_text
 
 
-def test_request_reset_for_a_verified_identity_with_no_password_sends_nothing(
+def test_request_reset_for_a_verified_identity_with_no_password_mails_how_it_signs_in_and_no_link(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """It signs in with a provider, so it gets no reset link, and a notice saying so rather than silence."""
     with _client(tmp_path) as client:
         assert (
             client.post(
@@ -310,15 +338,22 @@ def test_request_reset_for_a_verified_identity_with_no_password_sends_nothing(
         engine = create_engine(f"sqlite:///{tmp_path / 'reset-test.db'}")
         with engine.begin() as connection:
             connection.execute(
-                text('UPDATE "user" SET email_verified_at = CURRENT_TIMESTAMP WHERE email = :email'),
+                text(
+                    "UPDATE \"user\" SET email_verified_at = CURRENT_TIMESTAMP, oauth_provider = 'github' "
+                    "WHERE email = :email"
+                ),
                 {"email": "ada@example.com"},
             )
         engine.dispose()
 
         status_code, log_text = _request_reset(client, caplog, email="ada@example.com")
+        _, unknown_log_text = _request_reset(client, caplog, email="nobody@example.com")
 
         assert status_code == 200
-        assert "mail:console" not in log_text
+        assert "You already have an Otari account" in log_text
+        assert "signs in with GitHub" in log_text
+        assert "token=" not in log_text
+        assert "mail:console" not in unknown_log_text
 
     engine = create_engine(f"sqlite:///{tmp_path / 'reset-test.db'}")
     with engine.begin() as connection:
@@ -649,3 +684,116 @@ def test_an_ordinary_reset_keeps_the_passkeys(tmp_path: Path, caplog: pytest.Log
         _complete_reset(client, log_text)
 
     assert _passkey_count(tmp_path) == 1
+
+
+def _password_link(client: TestClient, account_id: str, *, headers: dict[str, str] | None = None) -> Response:
+    return client.post(f"{API_ROOT}/admin/users/{account_id}/password-link", headers=headers)
+
+
+def _vouched_at(tmp_path: Path, *, email: str) -> object:
+    engine = create_engine(f"sqlite:///{tmp_path / 'reset-test.db'}")
+    with engine.begin() as connection:
+        value = connection.execute(
+            text('SELECT email_vouched_at FROM "user" WHERE email = :email'), {"email": email}
+        ).scalar_one()
+    engine.dispose()
+    return value
+
+
+def test_an_operator_hands_a_member_a_password_link_where_mail_is_off(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The way back for a member who forgot their password on a deployment that cannot mail a link."""
+    with _client(tmp_path) as client:
+        _claimed_and_verified(client, caplog, email="ada@example.com")
+        account_id = _account_id(client, email="ada@example.com")
+
+    with _client(tmp_path, mail_transport="none", public_base_url=None) as client:
+        issued = _password_link(client, account_id, headers={"Otari-Key": MASTER_KEY})
+        assert issued.status_code == 201, issued.text
+        body = issued.json()
+        assert body["mail_sent"] is False
+        token = body["link"].split("token=", 1)[1]
+
+        confirmed = client.post(
+            f"{API_ROOT}/auth/password/reset/confirm", json={"token": token, "new_password": NEW_PASSWORD}
+        )
+        assert confirmed.status_code == 204, confirmed.text
+        signed_in = client.post(f"{API_ROOT}/auth/session", json={"email": "ada@example.com", "password": NEW_PASSWORD})
+        assert signed_in.status_code == 200, signed_in.text
+
+    # The mailbox never saw the link, so the address is vouched for rather than proven.
+    assert _vouched_at(tmp_path, email="ada@example.com") is not None
+
+
+def test_an_operator_password_link_is_mailed_where_mail_is_on(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    with _client(tmp_path) as client:
+        _claimed_and_verified(client, caplog, email="ada@example.com")
+        account_id = _account_id(client, email="ada@example.com")
+
+        issued = _with_logs(
+            client, caplog, lambda: _password_link(client, account_id, headers={"Otari-Key": MASTER_KEY})
+        )
+        assert issued.status_code == 201, issued.text
+        assert issued.json()["mail_sent"] is True
+        assert issued.json()["link"] is None
+        token = _extract_token(caplog.text)
+
+        confirmed = client.post(
+            f"{API_ROOT}/auth/password/reset/confirm", json={"token": token, "new_password": NEW_PASSWORD}
+        )
+        assert confirmed.status_code == 204, confirmed.text
+
+    assert _vouched_at(tmp_path, email="ada@example.com") is None
+
+
+def test_an_operator_password_link_is_refused_where_it_could_not_help(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with _client(tmp_path) as client:
+        _claimed_and_verified(client, caplog, email="ada@example.com")
+        ada = _account_id(client, email="ada@example.com")
+        assert (
+            client.post(
+                f"{API_ROOT}/organizations/me/members",
+                json={"email": "grace@example.com", "role": "member"},
+                headers={"Otari-Key": MASTER_KEY},
+            ).status_code
+            == 201
+        )
+        engine = create_engine(f"sqlite:///{tmp_path / 'reset-test.db'}")
+        with engine.begin() as connection:
+            connection.execute(
+                text('UPDATE "user" SET email_verified_at = CURRENT_TIMESTAMP WHERE email = :email'),
+                {"email": "grace@example.com"},
+            )
+        engine.dispose()
+        grace = _account_id(client, email="grace@example.com")
+
+        provider_only = _password_link(client, grace, headers={"Otari-Key": MASTER_KEY})
+        unknown = _password_link(client, "00000000-0000-0000-0000-000000000000", headers={"Otari-Key": MASTER_KEY})
+        deactivated_status = client.patch(
+            f"{API_ROOT}/admin/users/{ada}", json={"is_active": False}, headers={"Otari-Key": MASTER_KEY}
+        ).status_code
+        deactivated = _password_link(client, ada, headers={"Otari-Key": MASTER_KEY})
+
+    assert deactivated_status == 200
+    assert provider_only.status_code == 409, provider_only.text
+    assert "Account settings" in provider_only.json()["detail"]
+    assert unknown.status_code == 404, unknown.text
+    assert deactivated.status_code == 409, deactivated.text
+    assert _reset_token_hash(tmp_path, email="grace@example.com") is None
+
+
+def test_a_member_cannot_issue_a_password_link(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """The surface answers a non-operator as if it did not exist, like the rest of /admin."""
+    with _client(tmp_path) as client:
+        _claimed_and_verified(client, caplog, email="ada@example.com")
+        account_id = _account_id(client, email="ada@example.com")
+        signed_in = client.post(f"{API_ROOT}/auth/session", json={"email": "ada@example.com", "password": PASSWORD})
+        assert signed_in.status_code == 200, signed_in.text
+
+        response = _password_link(client, account_id)
+
+    assert response.status_code == 404, response.text
+    assert _reset_token_hash(tmp_path, email="ada@example.com") is None

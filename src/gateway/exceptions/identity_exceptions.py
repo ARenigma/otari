@@ -234,6 +234,18 @@ class OAuthExchangeError(TenancyValidationError):
         super().__init__(f"{provider} did not complete the sign-in. Try again.")
 
 
+class OAuthProviderUnavailableError(OAuthExchangeError):
+    """The provider failed or could not be reached while exchanging the code or reading the identity.
+
+    502 rather than its base's 400: the request was sound and the upstream failed, so a provider outage
+    shows as a server-side failure to whatever watches the status codes. The message stays the base's,
+    which is why the route renders this error itself instead of leaving it to the tenancy handler,
+    which replaces every 5xx message with a generic one.
+    """
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+
+
 class OAuthStateError(TenancyValidationError):
     """The callback did not carry a ``state`` this deployment is still waiting on.
 
@@ -272,6 +284,22 @@ class OAuthEmailNotVerifiedError(TenancyError):
         super().__init__(
             f"{provider} did not confirm that address is yours, so it cannot sign you in here. "
             f"Verify your email address with {provider} and try again."
+        )
+
+
+class OAuthEmailMissingError(TenancyError):
+    """The provider shared no email address, so nothing here can be matched to the person.
+
+    401 and named for the reason ``OAuthEmailNotVerifiedError`` gives. Separate from it because the advice
+    differs: there is no address to verify, so the person adds one at the provider.
+    """
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+
+    def __init__(self, provider: str) -> None:
+        super().__init__(
+            f"{provider} did not share an email address, so it cannot sign you in here. "
+            f"Add a verified email address to your {provider} account and try again."
         )
 
 
@@ -396,10 +424,22 @@ class SignInAddressRequiredError(TenancyValidationError):
 
 
 class EmailAlreadyInUseError(TenancyConflictError):
-    """Another identity already holds the address being claimed."""
+    """Another identity already holds the address being claimed.
+
+    The claim sets the caller's own address and password, never another account's, so the message says so
+    and names the way an operator helps somebody else back in.
+    """
 
     def __init__(self, email: str) -> None:
-        super().__init__(f"'{email}' already belongs to another identity")
+        super().__init__(
+            f"'{email}' already belongs to another account. This sets the address and password of the account "
+            "making the request, not another one; to help that person sign in, send them a password link from "
+            "the Accounts page."
+        )
+
+
+class PasswordLinkUnavailableError(TenancyConflictError):
+    """An operator asked for a password link for an account that cannot use one."""
 
 
 class InvalidEmailError(TenancyValidationError):
@@ -415,7 +455,7 @@ class InvalidEmailError(TenancyValidationError):
 
 
 class VerificationTokenInvalidError(TenancyValidationError):
-    """A verification token that is unknown, expired, or already consumed, or a password that does not match it.
+    """A verification token that is unknown, expired, or already consumed.
 
     One message for all of them, the same reasoning ``InvitationNotFoundError``
     gives an unknown-or-foreign invitation: distinguishing "expired" from
@@ -423,10 +463,22 @@ class VerificationTokenInvalidError(TenancyValidationError):
     is true of a token they do not hold.
     """
 
+    def __init__(self, message: str = "This verification link is invalid, expired, or already used") -> None:
+        super().__init__(message)
+
+
+class VerificationPasswordIncorrectError(VerificationTokenInvalidError):
+    """A live verification token presented with a password other than the one chosen at signup.
+
+    Named apart from a dead link because the two need different actions: this link still works, so the person
+    tries the password again. Only a holder of the link learns that it is live. A subclass, so every refusal
+    still counts toward the per-client limit on verification attempts.
+    """
+
     def __init__(self) -> None:
         super().__init__(
-            "This verification link is invalid, expired, or already used, "
-            "or the password is not the one chosen when signing up"
+            "That is not the password chosen when signing up. This link still works, so try again, "
+            'or choose a new password with "Forgot your password?".'
         )
 
 
@@ -477,11 +529,13 @@ __all__ = [
     "InvalidCredentialsError",
     "InvalidEmailError",
     "OAuthAccountLinkedElsewhereError",
+    "OAuthEmailMissingError",
     "OAuthEmailNotVerifiedError",
     "OAuthExchangeError",
     "OAuthIdentityLinkConflictError",
     "OAuthIdentityUnknownError",
     "OAuthNotConfiguredError",
+    "OAuthProviderUnavailableError",
     "OAuthStateError",
     "PasskeyAlreadyRegisteredError",
     "PasskeyCeremonyError",
@@ -490,11 +544,13 @@ __all__ = [
     "PasskeyNotFoundError",
     "PasskeySignInFailedError",
     "PasskeysNotConfiguredError",
+    "PasswordLinkUnavailableError",
     "PasswordNotSetError",
     "PasswordPolicyError",
     "ResetTokenInvalidError",
     "SignInAddressRequiredError",
     "TermsNotAcceptedError",
     "UnmodifiedPasswordError",
+    "VerificationPasswordIncorrectError",
     "VerificationTokenInvalidError",
 ]

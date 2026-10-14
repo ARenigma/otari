@@ -55,7 +55,9 @@ import {
  * public auth path off the hash ahead of the auth gate, so this page keeps
  * rendering until the hash changes, whether or not a session was minted. The
  * failure ending offers a link; the success ending changes the hash itself,
- * since there is nothing left for the person to read.
+ * since there is nothing left for the person to read. The one exception is a
+ * sign-in that removed the account's earlier password, which the person is told
+ * about before they go on, with links rather than a redirect.
  */
 export function OAuthCallbackPage({
   provider,
@@ -69,6 +71,7 @@ export function OAuthCallbackPage({
   const { terms_url } = useDeployment()
   const [failure, setFailure] = useState<string>()
   const [needsTerms, setNeedsTerms] = useState(false)
+  const [passwordRemoved, setPasswordRemoved] = useState(false)
   // The effect below signs somebody in, so it must run once and not once per
   // render. React's development StrictMode mounts an effect twice on purpose,
   // and the second run would post a code the first already spent, turning every
@@ -137,6 +140,10 @@ export function OAuthCallbackPage({
             authentication_method: provider,
           })
           login()
+          if (result.passwordRemoved) {
+            setPasswordRemoved(true)
+            return
+          }
           // Signing in is not enough to stop this page rendering, and leaving
           // the hash alone strands the person here. `DeploymentRoot` matches a
           // public auth path *before* the auth gate, so an unchanged hash keeps
@@ -165,6 +172,27 @@ export function OAuthCallbackPage({
       }
     })()
   }, [provider, hash, login, recordEvent])
+
+  if (passwordRemoved) {
+    return (
+      <PublicAuthLayout
+        title="You're signed in"
+        footer={
+          <>
+            <PublicAuthLink to="#/account">Set a new password</PublicAuthLink>
+            <PublicAuthLink to="#/">Continue</PublicAuthLink>
+          </>
+        }
+      >
+        <p className="text-center text-body" role="status">
+          Signing in with {oauthProviderLabel(provider)} confirmed your email
+          address, so the password set on this account before then was removed:
+          whoever chose it may not have been you. To sign in with a password
+          again, set a new one from Account settings.
+        </p>
+      </PublicAuthLayout>
+    )
+  }
 
   if (failure === undefined) {
     return (

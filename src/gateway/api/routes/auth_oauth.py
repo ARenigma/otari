@@ -64,6 +64,7 @@ from gateway.exceptions import TenancyError
 from gateway.exceptions.identity_exceptions import (
     OAuthIdentityLinkConflictError,
     OAuthNotConfiguredError,
+    OAuthProviderUnavailableError,
     TermsNotAcceptedError,
 )
 from gateway.log_config import logger
@@ -183,6 +184,14 @@ class OAuthSessionResponse(BaseModel):
             "The organization that identity is acting in, which scopes every tenancy surface. "
             "Null when it is an active member of none, as an invitee who has not accepted yet is not."
         )
+    )
+    password_removed: bool = Field(
+        default=False,
+        description=(
+            "Whether this sign-in removed a password the account held: the first provider sign-in on an "
+            "address nobody had proven removes the password set before then. The person can set a new one "
+            "from Account settings."
+        ),
     )
 
 
@@ -310,6 +319,9 @@ async def callback(
     except (OAuthIdentityLinkConflictError, TermsNotAcceptedError):
         # A concurrent sign-in finished first, or the terms are still to accept, so nobody failed to authenticate.
         raise
+    except OAuthProviderUnavailableError as exc:
+        # Rendered here so the 502 keeps its message, which the tenancy handler would blank.
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from None
     except TenancyError:
         record_auth_failure("invalid_oauth")
         raise
@@ -325,6 +337,7 @@ async def callback(
         expires_at=signed_in.session_expires_at,
         user_id=identity.id,
         active_organization_id=signed_in.active_organization_id,
+        password_removed=signed_in.password_removed,
     )
 
 

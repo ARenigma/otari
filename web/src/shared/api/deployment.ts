@@ -4,6 +4,7 @@ import type {
   DeploymentAdminAccess,
   DeploymentUser,
   GatewayHealth,
+  PasswordLink,
   UpdateDeploymentUserRequest,
 } from "@/client"
 import { apiFetch, DASHBOARD_BUILD_PATH, siteFetch } from "@/shared/api/client"
@@ -134,5 +135,21 @@ export function useUpdateDeploymentUser() {
       // organization roster may offer it, so the tenancy reads go stale with it.
       void queryClient.invalidateQueries({ queryKey: [ORGANIZATION_MEMBERS] })
     },
+  })
+}
+
+/**
+ * Give an account a single-use link that sets its password.
+ *
+ * The gateway mails it where it can and otherwise returns it to pass on, so the
+ * result says which. No cached read changes, so nothing is invalidated.
+ */
+export function useIssuePasswordLink() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<PasswordLink>(
+        `/admin/users/${encodeURIComponent(id)}/password-link`,
+        { method: "POST" },
+      ),
   })
 }

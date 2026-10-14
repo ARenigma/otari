@@ -43,7 +43,10 @@ undecryptable. Providers configured in `config.yml` do not require it.
 The operator can claim a new deployment by setting an email address and password
 from Account settings. After that, the sign-in page uses the password rather than
 the master key. The master key remains valid for management API calls and can
-reset the operator password.
+reset the operator password. It resets the operator's password only: to help a
+member who forgot theirs, send them a password link from Accounts, which emails
+it where mail is configured and otherwise gives you the link to share (see
+[Access control](access-control.md#deployment-wide-account-administration)).
 
 The sign-in page offers the email and password form as soon as any identity holds
 a password, which can be before the operator claims the deployment: a member

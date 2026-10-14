@@ -386,4 +386,4 @@ async def delete_session(
             # a live cookie the operator believes is gone. Clear it and return
             # 204 anyway; the unrevoked row dies on its TTL.
             logger.warning("Failed to revoke the dashboard session on sign-out", exc_info=True)
-    clear_session_cookie(response)
+    clear_session_cookie(response, secure=request_is_https(request))

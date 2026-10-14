@@ -253,6 +253,6 @@ def apply_session_cookie(response: Response, token: str, expires_at: datetime, *
     )
 
 
-def clear_session_cookie(response: Response) -> None:
-    """Expire the session cookie in the browser (sign-out)."""
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+def clear_session_cookie(response: Response, *, secure: bool) -> None:
+    """Expire the session cookie in the browser (sign-out), with the attributes ``apply_session_cookie`` sets."""
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/", secure=secure, httponly=True, samesite="strict")

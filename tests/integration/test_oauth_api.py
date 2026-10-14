@@ -34,7 +34,7 @@ from sqlmodel import col, delete
 
 from gateway.api.routes import auth_oauth
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.exceptions.identity_exceptions import OAuthIdentityLinkConflictError
+from gateway.exceptions.identity_exceptions import OAuthIdentityLinkConflictError, OAuthProviderUnavailableError
 from gateway.log_config import logger as gateway_logger
 from gateway.models.identity import EmailAssertion, OAuthIdentityLink, ProviderIdentity
 from gateway.models.tenancy import Organization, User, WebAuthnCredential
@@ -806,7 +806,25 @@ def test_a_provider_that_returns_no_address_at_all_is_refused(
 ) -> None:
     stub_exchange(monkeypatch, email=None)
 
-    assert client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"}).status_code == 401
+    response = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+
+    assert response.status_code == 401
+    # Nothing to verify, so the advice is to add an address, not to verify one.
+    assert "Google did not share an email address" in response.json()["detail"]
+
+
+def test_a_provider_outage_answers_502_with_the_same_message(
+    client: TestClient, oauth_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _unavailable(*_args: Any, **_kwargs: Any) -> ProviderIdentity:
+        raise OAuthProviderUnavailableError("Google")
+
+    monkeypatch.setattr("gateway.api.routes.auth_oauth.exchange_code", _unavailable)
+
+    response = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Google did not complete the sign-in. Try again."}
 
 
 def test_a_deactivated_identity_cannot_sign_in_with_a_provider_either(
@@ -1082,6 +1100,95 @@ def test_a_password_on_an_already_verified_address_survives_linking_a_provider(
     assert _identity(db_session, "ada@example.com").oauth_provider == "google"
     password_sign_in = client.post(f"{API_ROOT}/auth/session", json={"email": "ada@example.com", "password": PASSWORD})
     assert password_sign_in.status_code == 200, password_sign_in.text
+
+
+def test_a_linked_sign_in_proves_an_address_an_operator_link_left_vouched(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    test_config: GatewayConfig,
+    signup_configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    db_session: Session,
+) -> None:
+    # A password chosen through a shared operator link never reached the mailbox, so the owner signing in
+    # through their existing provider link takes the account back, as a first sign-in would.
+    add_member(client, master_key_header, email="ada@example.com")
+    gateway_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="gateway")
+    try:
+        sign_up(client, email="ada@example.com", password=PASSWORD)
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+    token = _TOKEN_IN_LINK.search(caplog.text)
+    assert token, caplog.text
+    verified = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token.group(1), "password": PASSWORD})
+    assert verified.status_code == 200, verified.text
+    stub_exchange(monkeypatch)
+    linked = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["password_removed"] is False
+    client.cookies.clear()
+
+    monkeypatch.setattr(test_config, "mail_transport", "none")
+    identity = _identity(db_session, "ada@example.com")
+    issued = client.post(f"{API_ROOT}/admin/users/{identity.id}/password-link", headers=master_key_header)
+    assert issued.status_code == 201, issued.text
+    shared_token = issued.json()["link"].split("token=", 1)[1]
+    redeemed = client.post(
+        f"{API_ROOT}/auth/password/reset/confirm", json={"token": shared_token, "new_password": UNPROVEN_PASSWORD}
+    )
+    assert redeemed.status_code == 204, redeemed.text
+    vouched_cookie = _signed_in_cookie(client, email="ada@example.com", password=UNPROVEN_PASSWORD)
+    db_session.expire_all()
+    _give_a_passkey_and_a_reset_link(db_session, _identity(db_session, "ada@example.com"))
+
+    signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+    assert signed_in.status_code == 200, signed_in.text
+    assert signed_in.json()["password_removed"] is True
+    client.cookies.clear()
+
+    client.cookies.set(SESSION_COOKIE_NAME, vouched_cookie)
+    assert client.get(f"{API_ROOT}/organizations/me").status_code == 401
+    client.cookies.clear()
+    password_sign_in = client.post(
+        f"{API_ROOT}/auth/session", json={"email": "ada@example.com", "password": UNPROVEN_PASSWORD}
+    )
+    assert password_sign_in.status_code == 401
+    db_session.expire_all()
+    after = _identity(db_session, "ada@example.com")
+    assert after.email_vouched_at is None
+    assert after.hashed_password is None
+    assert after.password_reset_token_hash is None
+    assert _passkeys(db_session, after) == []
+
+
+def test_a_linked_sign_in_keeps_a_proven_password(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    signup_configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    add_member(client, master_key_header, email="ada@example.com")
+    gateway_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="gateway")
+    try:
+        sign_up(client, email="ada@example.com", password=PASSWORD)
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+    token = _TOKEN_IN_LINK.search(caplog.text)
+    assert token, caplog.text
+    verified = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token.group(1), "password": PASSWORD})
+    assert verified.status_code == 200, verified.text
+    stub_exchange(monkeypatch)
+    for _ in range(2):
+        signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+        assert signed_in.status_code == 200, signed_in.text
+        assert signed_in.json()["password_removed"] is False
+        client.cookies.clear()
+
+    assert _signed_in_cookie(client, email="ada@example.com", password=PASSWORD)
 
 
 def test_a_second_provider_sign_in_leaves_the_identity_as_the_first_left_it(
@@ -1379,6 +1486,8 @@ def test_a_provider_sign_in_ends_the_access_a_vouched_password_opened(
 
     signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
     assert signed_in.status_code == 200, signed_in.text
+    # The person is told, so the password they chose does not just stop working.
+    assert signed_in.json()["password_removed"] is True
     client.cookies.clear()
 
     client.cookies.set(SESSION_COOKIE_NAME, vouched_cookie)
@@ -1411,7 +1520,9 @@ def test_a_provider_sign_in_keeps_the_access_a_proven_password_opened(
     _give_a_passkey_and_a_reset_link(db_session, identity)
     stub_exchange(monkeypatch)
 
-    assert client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"}).status_code == 200
+    signed_in = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": "s"})
+    assert signed_in.status_code == 200, signed_in.text
+    assert signed_in.json()["password_removed"] is False
     client.cookies.clear()
 
     client.cookies.set(SESSION_COOKIE_NAME, proven_cookie)
@@ -1784,7 +1895,8 @@ def test_a_refused_exchange_leaves_the_state_spendable_for_the_retry(
     monkeypatch.setattr(OAuthClient, "_token_request", _boom)
     failed = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c", "state": state})
 
-    assert failed.status_code == 400
+    # An unreachable provider is an upstream failure, not the caller's.
+    assert failed.status_code == 502
     stub_token_endpoint(monkeypatch)
     retried = client.post(f"{API_ROOT}/auth/oauth/google/callback", json={"code": "c2", "state": state})
 
