@@ -694,6 +694,10 @@ class TestProviderFailures:
         [
             (TokenExchangeError("token endpoint answered 500"), "exchange"),
             (TokenExchangeError("try later", error_code="temporarily_unavailable"), "exchange"),
+            # A 5xx whose body carries a code of the provider's own is still the provider failing.
+            (TokenExchangeError("upstream_failure: boom", error_code="upstream_failure"), "exchange"),
+            # Refused client credentials are this deployment's configuration, not the person's code.
+            (TokenExchangeError("invalid_client", error_code="invalid_client"), "exchange"),
             (IdentityFetchError("userinfo answered 500"), "fetch"),
             (TimeoutError(), "exchange"),
         ],

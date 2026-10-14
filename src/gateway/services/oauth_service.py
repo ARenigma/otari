@@ -49,7 +49,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 from apron_auth import OAuthClient, ProviderConfig
-from apron_auth.errors import SERVER_ERROR, TEMPORARILY_UNAVAILABLE, StateError, TokenExchangeError
+from apron_auth.errors import INVALID_GRANT, StateError, TokenExchangeError
 from apron_auth.models import OAuthPendingState as PendingState
 from apron_auth.providers import github as apron_github
 from apron_auth.providers import google as apron_google
@@ -369,7 +369,8 @@ async def exchange_code(
             credentials for ``provider``, or does not know its own address.
         OAuthStateError: If ``state`` names no authorization this deployment is
             still waiting on, for ``provider``, from this browser.
-        OAuthExchangeError: If the provider refuses the code, or the identity does not fit the link table.
+        OAuthExchangeError: If the provider says the code is invalid, expired or spent, or the identity does not
+            fit the link table.
         OAuthProviderUnavailableError: If the provider fails or cannot be reached during the exchange or the
             identity fetch.
             The provider's own words stay on the traceback and out of the response, as that error's docstring says.
@@ -410,11 +411,13 @@ async def exchange_code(
 
 
 def _provider_refused_the_code(error: Exception) -> bool:
-    """Whether the token endpoint answered with an OAuth error about the request, such as a spent code.
+    """Whether the token endpoint said the authorization code is invalid, expired or already spent.
 
-    Anything else (no answer, a server error, a failed identity fetch) is the provider failing, not the caller.
+    Only ``invalid_grant`` says that. Every other failure is the provider's or this deployment's: no answer, a
+    server error under whatever code it carries, a failed identity fetch, or ``invalid_client`` and
+    ``unauthorized_client``, which mean the configured client credentials were refused.
     """
-    return isinstance(error, TokenExchangeError) and error.error_code not in {"", SERVER_ERROR, TEMPORARILY_UNAVAILABLE}
+    return isinstance(error, TokenExchangeError) and error.error_code == INVALID_GRANT
 
 
 def require_configured(config: GatewayConfig, provider: str) -> None:
