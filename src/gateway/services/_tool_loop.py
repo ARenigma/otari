@@ -36,12 +36,12 @@ AccT = TypeVar("AccT")
 class ToolBackend(Protocol):
     """Subset of the tool-backend surface the loop drives.
 
-    Structurally implemented by ``MCPClientPool``, ``SandboxBackend``, and
-    ``WebSearchBackend``; each exposes the same members the loop and the route
-    pipeline need to advertise tools, decide ownership, execute a call, and
-    describe each tool's purpose for the system-message hint block. Widening
-    ``pool`` to this Protocol lets the routes pass any of those backends
-    without casts.
+    Structurally implemented by ``MCPClientPool``, ``SandboxBackend``,
+    ``WebRetrievalBackend`` and ``CombinedToolBackend`` (``services/tools``); each exposes the
+    same members the loop and the route pipeline need to advertise tools, decide
+    ownership, execute a call, and describe each tool's purpose for the
+    system-message hint block. Widening ``pool`` to this Protocol lets the routes
+    pass any of those backends without casts.
     """
 
     @property

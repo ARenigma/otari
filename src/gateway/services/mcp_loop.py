@@ -38,7 +38,13 @@ from gateway.services._tool_loop import (
 )
 from gateway.services.inference import require_choices
 from gateway.services.providers import acompletion
-from gateway.services.tools import MAX_TOOL_ITERATIONS_CAP, MAX_USES_EXCEEDED_ERROR, ToolUseBudget, is_capped_call
+from gateway.services.tools import (
+    MAX_TOOL_ITERATIONS_CAP,
+    MAX_USES_EXCEEDED_ERROR,
+    ToolUseBudget,
+    is_capped_call,
+    owning_backend,
+)
 
 if TYPE_CHECKING:
     from any_llm.types.completion import ChatCompletion, ChatCompletionChunk, CompletionUsage
@@ -211,12 +217,13 @@ async def _execute_mcp_calls(
         if capped and budget is not None and budget.exhausted(name):
             out.append({"role": "tool", "tool_call_id": tc["id"] or "", "content": MAX_USES_EXCEEDED_ERROR})
             continue
+        owner = owning_backend(pool, name)
         try:
-            text = await pool.call_tool(name, args)
+            text = await owner.call_tool(name, args)
         except MaxToolIterationsExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 — see docstring
-            detail = tool_failure_detail(pool, name)
+            detail = tool_failure_detail(owner, name)
             log_tool_failure(name, detail, exc)
             text = f"[tool error] {detail}"
         else:
