@@ -449,6 +449,8 @@ The first sign-in with a provider account links it to the account that holds the
 
 The first sign-in on an address that is not yet verified, or that an organization only vouched for (see [Invitations](#invitations)), marks it verified. It also removes everything set up on that address before then: its password, any verification or reset link, every session signed in with that password, and every passkey registered from one. The provider confirms who owns the address, not who chose that password. The person can set a new password from their account page once signed in. A password on an address that was already verified is kept, with its sessions and passkeys. A later sign-in through the link does not change the account's password or verification.
 
+Where the deployment publishes terms (`terms_url`), a sign-in that creates an account, or that is the first way in to one an owner or admin added or invited, needs the person's acceptance of them, as the signup form and a first password from an invitation link do. The dashboard asks before it sends the person to the provider and returns the acceptance with the callback (`terms_accepted`). Without it the sign-in is refused with the code `terms_not_accepted`, and nothing it would have set up is kept: no account, organization, workspace, provider link or session. With it, the acceptance is recorded on the account. A sign-in to an account someone already claimed, or through a provider account already linked to one, does not ask, and an account that never accepted the terms is not asked to later.
+
 A sign-in that creates an account, or that is the first way in to one an owner or admin added, is reported as a signup to whatever growth integration the deployment runs, as the signup form, a first password set from an invitation link, and a first password set by reset are.
 
 ### Signup
@@ -462,7 +464,8 @@ sign up with an address they do not hold, and the link then reaches the
 address's real owner, whose click must not activate a password a stranger
 chose. An owner who never signed up uses "Forgot your password?" instead, which
 replaces that password. Where the deployment publishes terms (`terms_url`),
-signup is refused unless they are accepted. What an unknown address does depends
+signup is refused unless they are accepted, with the form or with a provider (see
+[OAuth sign-in](#oauth-sign-in-google-and-github)). What an unknown address does depends
 on `open_signup`:
 
 - `false` (default): signup only completes an identity an owner or admin already
@@ -534,7 +537,8 @@ Opening the link lets the invitee accept. If the invited address has never signe
 in, the accept page asks them to choose a first password, and once they accept
 they can sign in straight away. No verification email is needed, so this works on
 a deployment without mail. Where the deployment publishes terms, choosing that
-password requires accepting them, as signup does. An address that can already sign in, by password or
+password requires accepting them, as signup does. Accepting without a password
+records no acceptance, so the provider sign-in that follows it asks for the terms. An address that can already sign in, by password or
 through a provider, just accepts; the link cannot set or replace a password on
 it. Neither can it for an address another organization has already added: the
 inviter holds the link too, so that person accepts without a password and then

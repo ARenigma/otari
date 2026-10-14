@@ -353,6 +353,8 @@ describe("the telemetry the signup page records", () => {
 })
 
 describe("OAuth first", () => {
+  const realLocation = window.location
+
   function stubNavigation() {
     const assign = vi.fn()
     Object.defineProperty(window, "location", {
@@ -373,6 +375,10 @@ describe("OAuth first", () => {
 
   afterEach(() => {
     window.sessionStorage.clear()
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: realLocation,
+    })
   })
 
   it("folds the address form behind a row while a provider is offered", () => {
@@ -464,6 +470,83 @@ describe("OAuth first", () => {
       TELEMETRY_EVENTS.SIGNUP_SUCCESS,
       expect.anything(),
     )
+  })
+
+  it("holds the providers behind the published terms, as it holds the form", async () => {
+    // A provider sign-up creates the account just as the form does, so it
+    // needs the same acceptance (the gateway refuses one without it).
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+    const user = userEvent.setup()
+    renderPage("#/signup", {
+      ...open,
+      termsUrl: "https://otari.example.com/terms",
+    })
+
+    const google = screen.getByRole("button", { name: "Sign up with Google" })
+    expect(google).toBeDisabled()
+    expect(
+      screen.getByRole("button", { name: "Sign up with GitHub" }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole("link", { name: "terms of service" }),
+    ).toHaveAttribute("href", "https://otari.example.com/terms")
+    await user.click(google)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    // One box for the card: opening the form shows no second one.
+    await user.click(screen.getByRole("button", { name: "Sign up with email" }))
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1)
+  })
+
+  it("carries the accepted terms into the provider round trip", async () => {
+    const assign = stubNavigation()
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        authorization_url: "https://accounts.google.com/o/oauth2/auth?x=1",
+        state: "the-state",
+      }),
+    )
+    const user = userEvent.setup()
+    renderPage("#/signup", {
+      ...open,
+      termsUrl: "https://otari.example.com/terms",
+    })
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "I accept the terms of service" }),
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Sign up with Google" }),
+    )
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalled())
+    expect(window.sessionStorage.getItem("otari.oauth.state")).toBe("the-state")
+    expect(window.sessionStorage.getItem("otari.oauth.terms-accepted")).toBe(
+      "true",
+    )
+  })
+
+  it("claims no acceptance on a deployment that published no terms", async () => {
+    const assign = stubNavigation()
+    window.sessionStorage.setItem("otari.oauth.terms-accepted", "true")
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        authorization_url: "https://accounts.google.com/o/oauth2/auth?x=1",
+        state: "the-state",
+      }),
+    )
+    const user = userEvent.setup()
+    renderPage("#/signup", open)
+
+    await user.click(
+      screen.getByRole("button", { name: "Sign up with Google" }),
+    )
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalled())
+    // A stale acceptance from an earlier flow does not ride along.
+    expect(
+      window.sessionStorage.getItem("otari.oauth.terms-accepted"),
+    ).toBeNull()
   })
 
   it("says so, and stays, when the gateway cannot start the sign-up", async () => {

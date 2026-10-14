@@ -2,10 +2,9 @@ import { useState } from "react"
 import { FiMail } from "react-icons/fi"
 import { Button } from "@/design-system/actions/Button"
 import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
-import { Checkbox } from "@/design-system/forms/Checkbox"
 import { PublicAuthFields } from "@/features/auth/overlayPublicAuthFields"
 import { useSignup } from "@/shared/api/auth"
-import { ApiError, startOAuthSignIn } from "@/shared/api/client"
+import { ApiError } from "@/shared/api/client"
 import { emailFromHash } from "@/shared/helpers/hashParams"
 import {
   MAX_PASSWORD_BYTES,
@@ -23,17 +22,18 @@ import {
   AuthOrRule,
   AuthProviderRows,
 } from "./AuthProviderButtons"
-import { rememberOAuthState } from "./OAuthCallbackPage"
 import {
   type OAuthProvider,
   oauthProviderLabel,
   renderableOAuthProviders,
 } from "./oauthProviders"
+import { leaveForOAuthProvider } from "./oauthRoundTrip"
 import {
   goToPublicAuthPage,
   PublicAuthLayout,
   PublicAuthLink,
 } from "./PublicAuthLayout"
+import { TermsAcceptanceField } from "./TermsAcceptanceField"
 
 /**
  * `#/signup`: register an address, or claim one an admin already added.
@@ -67,7 +67,11 @@ import {
  * answers that, and the server has carried `terms_accepted` and its
  * `terms_accepted_at` column throughout. Where there is a document, accepting
  * it is required, which is what makes the recorded acceptance mean anything.
- * It applies to the address form only: an OAuth sign-in records no acceptance.
+ * It gates the provider rows as well as the address form, because a provider
+ * sign-up creates the account just as the form does, and the gateway refuses
+ * one without the acceptance (`terms_not_accepted`). With providers on offer
+ * it therefore sits above them, the one box for every way in on the card; with
+ * none it stays in the form, above the button it gates.
  *
  * `?email=…` prefills the address for a link that names an invited one
  * (otari#835); the accept-invitation page sets a first password itself, so
@@ -107,6 +111,7 @@ export function SignupPage({ hash }: { hash: string }) {
     (terms_url === null || isTermsAccepted)
   const canSubmit = isComplete && problem === null
   const isBusy = signup.isPending || pendingProvider !== undefined
+  const awaitsTerms = terms_url !== null && !isTermsAccepted
 
   // A refusal describes a call that is no longer the one being made, so typing
   // clears it. Never while one is in flight: `reset()` returns the observer to
@@ -170,7 +175,7 @@ export function SignupPage({ hash }: { hash: string }) {
    * the outcome once there is one.
    */
   const startProvider = async (provider: OAuthProvider) => {
-    if (isBusy) {
+    if (isBusy || awaitsTerms) {
       return
     }
     setProviderError(null)
@@ -180,7 +185,9 @@ export function SignupPage({ hash }: { hash: string }) {
       authentication_method: provider,
     })
     try {
-      const started = await startOAuthSignIn(provider)
+      const started = await leaveForOAuthProvider(provider, {
+        termsAccepted: terms_url !== null,
+      })
       if (!started.isOk) {
         recordEvent(TELEMETRY_EVENTS.SIGNUP_FAILED, {
           authentication_method: provider,
@@ -193,10 +200,7 @@ export function SignupPage({ hash }: { hash: string }) {
           ),
         )
         setPendingProvider(undefined)
-        return
       }
-      rememberOAuthState(started.state)
-      window.location.assign(started.authorizationUrl)
     } catch (caught) {
       recordEvent(TELEMETRY_EVENTS.SIGNUP_FAILED, {
         authentication_method: provider,
@@ -232,12 +236,21 @@ export function SignupPage({ hash }: { hash: string }) {
 
         {providers.length > 0 ? (
           <>
+            {terms_url !== null ? (
+              <div className="pb-3">
+                <TermsAcceptanceField
+                  termsUrl={terms_url}
+                  isAccepted={isTermsAccepted}
+                  onChange={setIsTermsAccepted}
+                />
+              </div>
+            ) : null}
             <AuthProviderRows
               providers={providers}
               layout={isFormOpen ? "two-up" : "stacked"}
               verb="Sign up"
               pendingProvider={pendingProvider}
-              isDisabled={signup.isPending}
+              isDisabled={signup.isPending || awaitsTerms}
               onSelect={(provider) => void startProvider(provider)}
             />
             {providerError ? (
@@ -296,46 +309,12 @@ export function SignupPage({ hash }: { hash: string }) {
               errorMessage={problem ?? undefined}
             />
 
-            {/* Rendered only where there is a document to read, which is what
-                the deployment's `terms_url` says. Required rather than
-                optional: an acceptance the form would have submitted either way
-                records nothing. A plain anchor and not a router `Link`, because
-                the target is an address an operator configured and is usually
-                off this origin, and beside the control rather than inside its
-                label, which is the only arrangement that lets the terms be
-                read: HTML exempts an interactive descendant from a label's own
-                activation, but react-aria presses the label from a
-                document-level handler that knows no such exemption and that
-                nothing on the anchor can stop, so nested the link only ticked
-                the box (otari-ai#2146). `ariaLabel` carries the sentence the
-                visible label no longer holds in full. */}
-            {terms_url !== null ? (
-              <div className="flex flex-wrap items-center gap-x-1 text-caption">
-                {/* 44px target from a pseudo-element bleed of 13 above and 12
-                    below the 19px row, so the box is easy to hit on a phone
-                    without `hasTouchTarget`, which would add 25px of height to
-                    the card. The bleed is inside the form's own 12px gaps, so
-                    it overlaps no neighbour. */}
-                <Checkbox
-                  isSelected={isTermsAccepted}
-                  onChange={setIsTermsAccepted}
-                  ariaLabel="I accept the terms of service"
-                  className="relative before:absolute before:inset-x-0 before:-top-[13px] before:-bottom-[12px]"
-                >
-                  <span className="text-caption">I accept the</span>
-                </Checkbox>
-                <span>
-                  <a
-                    href={terms_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-medium text-link hover:text-link-hover"
-                  >
-                    terms of service
-                  </a>
-                  .
-                </span>
-              </div>
+            {terms_url !== null && providers.length === 0 ? (
+              <TermsAcceptanceField
+                termsUrl={terms_url}
+                isAccepted={isTermsAccepted}
+                onChange={setIsTermsAccepted}
+              />
             ) : null}
 
             <ErrorBanner error={signup.error} />

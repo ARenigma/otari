@@ -2,6 +2,7 @@
 
 from fastapi import status
 
+from gateway.core.error_codes import TERMS_NOT_ACCEPTED
 from gateway.exceptions import (
     TenancyConflictError,
     TenancyError,
@@ -441,6 +442,8 @@ class ResetTokenInvalidError(TenancyValidationError):
 
 class TermsNotAcceptedError(TenancyValidationError):
     """An account was about to become usable without accepting the terms this deployment publishes."""
+
+    error_code = TERMS_NOT_ACCEPTED
 
     def __init__(self) -> None:
         super().__init__("Accept the terms of service to continue")

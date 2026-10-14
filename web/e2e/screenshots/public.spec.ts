@@ -268,6 +268,66 @@ test("OAuth callback that did not complete", async ({ page }) => {
   await captureScreenshot(page, "oauth-callback-failed")
 })
 
+test("signup offering OAuth behind published terms", async ({ page }) => {
+  // The one box gating every way in on the card, above the provider rows.
+  await page.route("**/v1/bootstrap", async (route) => {
+    const response = await route.fetch()
+    const bootstrap = await response.json()
+    await route.fulfill({
+      response,
+      json: {
+        ...bootstrap,
+        mail_ready: true,
+        open_signup: true,
+        oauth_providers: ["google", "github"],
+        terms_url: "https://example.com/terms",
+      },
+    })
+  })
+  await page.goto("/#/signup")
+  await expect(
+    page.getByRole("checkbox", { name: "I accept the terms of service" }),
+  ).toBeVisible()
+  await captureScreenshot(page, "signup-oauth-terms")
+})
+
+test("OAuth callback asking for the terms a new account needs", async ({
+  page,
+}) => {
+  // A sign-in from a button that asked for no terms, refused because it would
+  // set up the account (`terms_not_accepted`). The exchange is stubbed: no
+  // provider here can mint a code.
+  await page.route("**/v1/bootstrap", async (route) => {
+    const response = await route.fetch()
+    const bootstrap = await response.json()
+    await route.fulfill({
+      response,
+      json: {
+        ...bootstrap,
+        oauth_providers: ["google", "github"],
+        terms_url: "https://example.com/terms",
+      },
+    })
+  })
+  await page.route("**/v1/auth/oauth/google/callback", async (route) => {
+    await route.fulfill({
+      status: 400,
+      json: {
+        detail: "Accept the terms of service to continue",
+        code: "terms_not_accepted",
+      },
+    })
+  })
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("otari.oauth.state", "the-state")
+  })
+  await page.goto("/#/auth/google/callback?code=c&state=the-state")
+  await expect(
+    page.getByRole("heading", { name: "Accept the terms to continue" }),
+  ).toBeVisible()
+  await captureScreenshot(page, "oauth-callback-terms")
+})
+
 test("OAuth callback on a gateway that configures no provider", async ({
   page,
 }) => {

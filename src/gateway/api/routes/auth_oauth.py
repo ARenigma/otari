@@ -61,7 +61,11 @@ from gateway.api.routes.auth_session import MAINTENANCE_MODE_REFUSAL
 from gateway.core.config import OAUTH_PROVIDERS, GatewayConfig
 from gateway.core.database import DATABASE_ERRORS
 from gateway.exceptions import TenancyError
-from gateway.exceptions.identity_exceptions import OAuthIdentityLinkConflictError, OAuthNotConfiguredError
+from gateway.exceptions.identity_exceptions import (
+    OAuthIdentityLinkConflictError,
+    OAuthNotConfiguredError,
+    TermsNotAcceptedError,
+)
 from gateway.log_config import logger
 from gateway.services.dashboard_session_service import (
     apply_session_cookie,
@@ -154,6 +158,14 @@ class OAuthCallbackRequest(BaseModel):
     state: str = Field(
         max_length=_MAX_SUBMITTED_STATE,
         description="The 'state' from the provider's redirect, as issued by /authorize.",
+    )
+    terms_accepted: bool = Field(
+        default=False,
+        description=(
+            "Whether the person accepted this deployment's terms before going to the provider. Required where the "
+            "bootstrap reports a terms_url and the sign-in creates the account, or is the first way in to one "
+            "nobody has claimed yet; ignored otherwise."
+        ),
     )
 
 
@@ -279,7 +291,10 @@ async def callback(
     failure: nobody failed to authenticate, the gateway declined to try.
 
     A sign-in that created the account, or is the first way in to one, is
-    reported to ``GrowthSignalPort`` as a signup once it has committed.
+    reported to ``GrowthSignalPort`` as a signup once it has committed. Where
+    the deployment publishes terms, that sign-in is refused with
+    ``terms_not_accepted`` unless the body carries ``terms_accepted``, and
+    nothing it would have created is kept.
     """
     throttle_public_auth(request)
     if await is_maintenance_mode(db):
@@ -291,9 +306,9 @@ async def callback(
         external = await exchange_code(
             config, provider, code=body.code, state=body.state, flow_secret=flow_cookie, db=db
         )
-        signed_in = await identities.sign_in_with_oauth(external)
-    except OAuthIdentityLinkConflictError:
-        # A concurrent sign-in finished first, so nobody failed to authenticate.
+        signed_in = await identities.sign_in_with_oauth(external, terms_accepted=body.terms_accepted)
+    except (OAuthIdentityLinkConflictError, TermsNotAcceptedError):
+        # A concurrent sign-in finished first, or the terms are still to accept, so nobody failed to authenticate.
         raise
     except TenancyError:
         record_auth_failure("invalid_oauth")

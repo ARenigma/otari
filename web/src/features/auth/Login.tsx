@@ -36,12 +36,12 @@ import {
   AuthProviderRows,
 } from "./AuthProviderButtons"
 import { LoginPageShell } from "./LoginPageShell"
-import { rememberOAuthState } from "./OAuthCallbackPage"
 import {
   type OAuthProvider,
   oauthProviderLabel,
   renderableOAuthProviders,
 } from "./oauthProviders"
+import { rememberOAuthState } from "./oauthRoundTrip"
 import { PublicAuthLink } from "./PublicAuthLayout"
 import { forgetSignInAddress, readSignInAddress } from "./signInAddress"
 

@@ -9,7 +9,11 @@ from sqlmodel import SQLModel
 
 from gateway.adapters.identity_provider_adapter import DeploymentIdentityProviderAdapter
 from gateway.core.unit_of_work import UnitOfWork
-from gateway.exceptions.identity_exceptions import OAuthIdentityLinkConflictError, OAuthIdentityUnknownError
+from gateway.exceptions.identity_exceptions import (
+    OAuthIdentityLinkConflictError,
+    OAuthIdentityUnknownError,
+    TermsNotAcceptedError,
+)
 from gateway.models.base import Base
 from gateway.models.identity import EmailAssertion, OAuthIdentityLink, ProviderIdentity
 from gateway.models.tenancy import User
@@ -27,7 +31,9 @@ pytestmark = pytest.mark.asyncio
 TENANT_PROVIDER = "acme-oidc"
 
 
-def _service_with(db: AsyncSession, uow: UnitOfWork, policy: IdentityProviderPort) -> IdentityService:
+def _service_with(
+    db: AsyncSession, uow: UnitOfWork, policy: IdentityProviderPort, *, terms_url: str | None = None
+) -> IdentityService:
     """Build the service as its request builder does, on ``policy``."""
     return IdentityService(
         uow,
@@ -36,6 +42,7 @@ def _service_with(db: AsyncSession, uow: UnitOfWork, policy: IdentityProviderPor
         organizations=OrganizationService(db, membership_listener=None, workspace_listener=NullWorkspaceListener()),
         sign_in_listener=DomainAutoJoinListener(OrganizationDomainRepository(uow), OrganizationMemberRepository(uow)),
         session_ttl_hours=1,
+        terms_url=terms_url,
     )
 
 
@@ -116,11 +123,12 @@ async def test_starting_a_session_records_the_sign_in_on_the_account(async_db: A
 class _ReturnsAccount:
     """An identity provider policy that signs every identity in as one account."""
 
-    def __init__(self, account: User) -> None:
+    def __init__(self, account: User, *, new_account: bool = False) -> None:
         self._account = account
+        self._new_account = new_account
 
     async def resolve(self, external: ProviderIdentity) -> IdentityResolution:
-        return IdentityResolution(identity=self._account, new_account=False)
+        return IdentityResolution(identity=self._account, new_account=self._new_account)
 
 
 async def test_a_deactivated_account_from_the_policy_is_refused_and_not_linked(async_db: AsyncSession) -> None:
@@ -170,3 +178,26 @@ async def test_an_identity_linked_elsewhere_during_the_sign_in_is_refused_as_a_c
         await service.sign_in_with_oauth(_verified("google", "ada@example.com"))
 
     assert await _count(async_db, OAuthIdentityLink) == 0
+
+
+async def test_any_policy_that_reports_a_new_account_is_held_to_the_published_terms(async_db: AsyncSession) -> None:
+    """The rule is the service's, so an adapter an overlay binds cannot leave it out."""
+    organization = await create_organization(async_db, slug="acme")
+    account = await UserRepository(async_db).create_local_identity(
+        email="ada@example.com", full_name="Ada", active_organization_id=organization.id
+    )
+    await async_db.commit()
+    policy = _ReturnsAccount(account, new_account=True)
+    service = _service_with(async_db, UnitOfWork(async_db), policy, terms_url="https://example.com/terms")
+
+    with pytest.raises(TermsNotAcceptedError):
+        await service.sign_in_with_oauth(_verified("google", "ada@example.com"))
+    assert await _count(async_db, OAuthIdentityLink) == 0
+    # The refusal rolled back, which expired the account the policy holds.
+    await async_db.refresh(account)
+    assert account.terms_accepted_at is None
+
+    signed_in = await service.sign_in_with_oauth(_verified("google", "ada@example.com"), terms_accepted=True)
+
+    await async_db.refresh(signed_in.account)
+    assert signed_in.account.terms_accepted_at is not None

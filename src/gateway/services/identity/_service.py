@@ -9,6 +9,7 @@ from gateway.exceptions.identity_exceptions import (
     OAuthAccountLinkedElsewhereError,
     OAuthEmailNotVerifiedError,
     OAuthIdentityUnknownError,
+    TermsNotAcceptedError,
 )
 from gateway.log_config import logger
 from gateway.models.identity import EmailAssertion, ProviderIdentity
@@ -65,7 +66,9 @@ class IdentityService:
         organizations: OrganizationService,
         sign_in_listener: SignInListener,
         session_ttl_hours: int,
+        terms_url: str | None,
     ) -> None:
+        """``terms_url`` is the terms the deployment publishes, or ``None`` where it publishes none."""
         self._uow = uow
         self._links = repositories.links
         self._sessions = repositories.sessions
@@ -74,13 +77,16 @@ class IdentityService:
         self._organizations = organizations
         self._sign_in_listener = sign_in_listener
         self._session_ttl_hours = session_ttl_hours
+        self._terms_url = terms_url
 
-    async def sign_in_with_oauth(self, external: ProviderIdentity) -> SignIn:
+    async def sign_in_with_oauth(self, external: ProviderIdentity, *, terms_accepted: bool = False) -> SignIn:
         """Sign in the account that an identity a provider has proven belongs to.
 
         An identity linked to an account signs in as that account, and its password and verification stay as they are.
         An identity with no link signs in as the account the identity provider policy returns, and is linked to it.
         An account holds at most one link for each provider.
+        Where the deployment publishes terms, a sign-in that creates the account, or is the first way in to one
+        nobody had claimed, needs ``terms_accepted`` and records it, as the signup form does.
         The account's changes, what the sign-in listener stages, its active organization, and the session commit
         together.
 
@@ -90,6 +96,8 @@ class IdentityService:
                 at the same provider.
             OAuthIdentityUnknownError: If the account is deactivated or gone.
             OAuthIdentityLinkConflictError: If a concurrent sign-in linked the identity to another account first.
+            TermsNotAcceptedError: If the sign-in would create or first claim an account without the published
+                terms. Nothing the sign-in staged is kept, including an organization the policy provisioned.
             TenancyError: If the identity provider policy refuses the identity.
 
         """
@@ -98,6 +106,8 @@ class IdentityService:
             raise OAuthEmailNotVerifiedError(label)
         async with self._uow:
             resolution = await self._account_for(external, label)
+            if resolution.new_account:
+                self._record_terms(resolution.identity, terms_accepted=terms_accepted)
             signed_in = await self.sign_in(resolution.identity)
         return replace(signed_in, new_account=resolution.new_account)
 
@@ -152,6 +162,18 @@ class IdentityService:
             )
             raise OAuthAccountLinkedElsewhereError(label)
         return IdentityResolution(identity=account, new_account=resolution.new_account)
+
+    def _record_terms(self, account: User, *, terms_accepted: bool) -> None:
+        """Stage the acceptance of the published terms on a new account, or refuse one that has none.
+
+        Here rather than in the identity provider policy, so an adapter an overlay binds cannot skip it.
+        """
+        if self._terms_url is None or account.terms_accepted_at is not None:
+            return
+        if not terms_accepted:
+            raise TermsNotAcceptedError
+        account.terms_accepted_at = datetime.now(UTC)
+        self._users.stage(account)
 
     async def _active_account(self, user_id: uuid.UUID, label: str) -> User:
         """Return the account read under a lock, so a concurrent deactivation is seen before the sign-in completes."""
