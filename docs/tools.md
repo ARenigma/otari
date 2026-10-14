@@ -407,13 +407,13 @@ Workspace-selected images must come from
 `sandbox_allowed_session_images` or the deployment's own session image.
 
 The authenticating API key determines the workspace. A workspace with no policy
-gets what `code_execution_workspace_default` says: unset or `true`, deployment
-defaults apply; `false`, code execution is off until a workspace owner or admin
-turns it on, and the request is refused as if a disabled policy were stored. The
+gets what `code_execution_workspace_default` says: `true`, deployment defaults
+apply; `false`, code execution is off until a workspace owner or admin turns it
+on, and the request is refused as if a disabled policy were stored. Unset, it is
+`true` everywhere except a hosted control plane, where it is `false`. The
 Playground's tools menu and the policy endpoint's `default_enabled` field read
-the same setting. Unset, it is on everywhere except a hosted control plane, which
-also gives each workspace it creates an enabled policy, so a new workspace
-starts with code execution on there. In hybrid mode, the control plane resolves
+the same setting. A hosted control plane also gives each workspace it creates
+an enabled policy, so a new workspace starts with code execution on there. In hybrid mode, the control plane resolves
 the policy instead.
 
 ## Web retrieval
@@ -582,13 +582,13 @@ On direct search, the policy's switch and its `max_results` apply; its domain
 lists, purpose hint and provider options do not. In hybrid mode, the
 connected control plane supplies workspace search configuration.
 
-A workspace with no policy gets what `web_search_workspace_default` says: unset
-or `true`, nothing is narrowed; `false`, web access (all three doors above) is
+A workspace with no policy gets what `web_search_workspace_default` says: `true`,
+nothing is narrowed; `false`, web access (all three doors above) is
 off until a workspace owner or admin turns it on, and a request is refused as if
 a disabled policy were stored, whatever search key the organization holds. The
 Playground's tools menu and the policy endpoint's `default_enabled` field read
-the same setting. Unset, it is on everywhere except a hosted control plane, so
-there web access is something a workspace turns on.
+the same setting. Unset, it is `true` everywhere except a hosted control plane,
+where it is `false`, so there web access is something a workspace turns on.
 
 ### Organization search keys
 

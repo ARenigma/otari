@@ -268,14 +268,11 @@ class ForwardedToolOffer:
         """Code execution, read the way the platform reads it.
 
         The platform's sandbox behind the data plane runs the code, so this
-        process's own sandbox config says nothing. And there a workspace turns
-        code execution on, so no row means off rather than "no narrowing".
+        process's own sandbox config says nothing.
         """
-        if workspace_enabled is None:
-            return ToolAvailability(configured=True, enabled=False, reason=_WORKSPACE_NOT_ENABLED)
-        if workspace_enabled is False:
-            return ToolAvailability(configured=True, enabled=False, reason=_WORKSPACE_DISABLED)
-        return ToolAvailability(configured=True, enabled=True)
+        return _tool_availability(
+            True, workspace_enabled, on_without_policy=self._config.code_execution_on_without_policy()
+        )
 
     def files(self) -> ToolAvailability:
         """No uploads: the data plane resolves a ``file_id`` against its own store, and would not find one stored here.

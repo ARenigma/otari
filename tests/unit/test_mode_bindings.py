@@ -74,3 +74,9 @@ def test_a_local_offer_reads_no_policy_as_off_where_the_deployment_makes_code_ex
         False,
         "Not turned on for this workspace.",
     )
+
+
+def test_a_forwarded_offer_honors_a_deployment_that_turns_code_execution_on_without_a_policy() -> None:
+    config = GatewayConfig(mode="hosted", code_execution_workspace_default=True)
+
+    assert ForwardedToolOffer(config).code_execution(None).enabled is True
