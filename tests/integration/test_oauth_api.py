@@ -1432,6 +1432,217 @@ def test_a_refusal_names_the_provider_the_way_it_writes_its_name(
     assert unverified.json()["detail"].startswith(f"{label} did not confirm")
 
 
+# ---------- the terms a deployment publishes ----------
+
+TERMS_URL = "https://example.com/terms"
+
+
+@pytest.fixture
+def terms_published(test_config: GatewayConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Publish terms on the deployment TestClient serves."""
+    monkeypatch.setattr(test_config, "terms_url", TERMS_URL)
+
+
+def _callback(client: TestClient, *, terms_accepted: bool | None = None) -> Any:
+    """Finish a stubbed Google sign-in, sending ``terms_accepted`` only when it is given."""
+    body: dict[str, Any] = {"code": "c", "state": "s"}
+    if terms_accepted is not None:
+        body["terms_accepted"] = terms_accepted
+    return client.post(f"{API_ROOT}/auth/oauth/google/callback", json=body)
+
+
+def _rows(db_session: Session, model: type[Organization] | type[User] | type[OAuthIdentityLink]) -> int:
+    return len(db_session.execute(select(model)).scalars().all())
+
+
+@pytest.mark.parametrize("terms_accepted", [None, False], ids=["absent", "false"])
+def test_open_signup_creates_no_account_through_a_provider_without_the_published_terms(
+    client: TestClient,
+    oauth_configured: None,
+    signup_open: None,
+    terms_published: None,
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+    terms_accepted: bool | None,
+) -> None:
+    """The rule the signup form follows, so a provider is not a way around the terms."""
+    stub_exchange(monkeypatch, email="stranger@example.com")
+    failures: list[str] = []
+    monkeypatch.setattr("gateway.api.routes.auth_oauth.record_auth_failure", failures.append)
+    before = {model: _rows(db_session, model) for model in (Organization, User, OAuthIdentityLink)}
+
+    response = _callback(client, terms_accepted=terms_accepted)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["code"] == "terms_not_accepted"
+    assert response.headers["Otari-Error-Code"] == "terms_not_accepted"
+    assert SESSION_COOKIE_NAME not in response.cookies
+    # The organization provisioned for the account went with it: no orphan tenancy is left behind.
+    db_session.expire_all()
+    assert {model: _rows(db_session, model) for model in before} == before
+    # The person proved who they are, so the refusal is not counted as a failed sign-in.
+    assert failures == []
+
+
+def test_open_signup_records_the_terms_a_provider_sign_up_accepted(
+    client: TestClient,
+    oauth_configured: None,
+    signup_open: None,
+    terms_published: None,
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    stub_exchange(monkeypatch, email="stranger@example.com")
+
+    response = _callback(client, terms_accepted=True)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["active_organization_id"]
+    assert _identity(db_session, "stranger@example.com").terms_accepted_at is not None
+
+
+def test_a_refused_provider_sign_up_can_be_finished_once_the_terms_are_accepted(
+    client: TestClient,
+    oauth_configured: None,
+    signup_open: None,
+    terms_published: None,
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    stub_exchange(monkeypatch, email="stranger@example.com")
+    organizations = _rows(db_session, Organization)
+
+    assert _callback(client).status_code == 400
+    accepted = _callback(client, terms_accepted=True)
+
+    assert accepted.status_code == 200, accepted.text
+    # One tenant, from the sign-in that kept it.
+    assert _rows(db_session, Organization) == organizations + 1
+
+
+def test_an_invitee_first_claim_through_a_provider_needs_the_published_terms(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    oauth_configured: None,
+    terms_published: None,
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    """The first way in to an account an organization added needs the terms, as an invitation's first password does."""
+    _invite(client, master_key_header, email="ada@example.com")
+    stub_exchange(monkeypatch)
+
+    refused = _callback(client)
+
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["code"] == "terms_not_accepted"
+    invitee = _identity(db_session, "ada@example.com")
+    assert (invitee.email_verified_at, invitee.oauth_provider, invitee.terms_accepted_at) == (None, None, None)
+    assert _links(db_session, str(invitee.id)) == []
+
+    accepted = _callback(client, terms_accepted=True)
+
+    assert accepted.status_code == 200, accepted.text
+    db_session.expire_all()
+    assert _identity(db_session, "ada@example.com").terms_accepted_at is not None
+
+
+def test_an_invitation_accepted_without_a_password_still_needs_the_terms_at_the_provider(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    oauth_configured: None,
+    terms_published: None,
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    """Accepting without a password records no terms, so the provider sign-in after it is still the first way in."""
+    link = _invite(client, master_key_header, email="ada@example.com")["accept_link"]
+    accepted = client.post(f"{API_ROOT}/invitations/accept", json={"token": link.split("token=")[1]})
+    assert accepted.status_code == 200, accepted.text
+    stub_exchange(monkeypatch)
+
+    assert _callback(client).status_code == 400
+    signed_in = _callback(client, terms_accepted=True)
+
+    assert signed_in.status_code == 200, signed_in.text
+    assert signed_in.json()["active_organization_id"]
+    assert _identity(db_session, "ada@example.com").terms_accepted_at is not None
+
+
+def test_a_linked_account_signs_in_without_the_terms_published_after_it_was_created(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    oauth_configured: None,
+    test_config: GatewayConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    """Out of scope here: an account that never accepted terms is not asked to on a later sign-in."""
+    add_member(client, master_key_header, email="ada@example.com")
+    stub_exchange(monkeypatch)
+    assert _sign_in(client).status_code == 200
+    monkeypatch.setattr(test_config, "terms_url", TERMS_URL)
+
+    again = _callback(client)
+
+    assert again.status_code == 200, again.text
+    assert _identity(db_session, "ada@example.com").terms_accepted_at is None
+
+
+def test_a_claimed_account_links_a_provider_without_the_terms(
+    client: TestClient,
+    master_key_header: dict[str, str],
+    signup_configured: None,
+    terms_published: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    db_session: Session,
+) -> None:
+    """An account someone already claimed with a password is not a new one, whatever provider it adds."""
+    add_member(client, master_key_header, email="ada@example.com")
+    gateway_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="gateway")
+    try:
+        signed_up = client.post(
+            f"{API_ROOT}/auth/signup",
+            json={"email": "ada@example.com", "password": PASSWORD, "terms_accepted": True},
+        )
+    finally:
+        gateway_logger.removeHandler(caplog.handler)
+    assert signed_up.status_code == 200, signed_up.text
+    token = _TOKEN_IN_LINK.search(caplog.text)
+    assert token, caplog.text
+    verified = client.post(f"{API_ROOT}/auth/verify-email", json={"token": token.group(1), "password": PASSWORD})
+    assert verified.status_code == 200, verified.text
+    accepted_at = _identity(db_session, "ada@example.com").terms_accepted_at
+    assert accepted_at is not None
+    stub_exchange(monkeypatch)
+
+    linked = _callback(client)
+
+    assert linked.status_code == 200, linked.text
+    db_session.expire_all()
+    identity = _identity(db_session, "ada@example.com")
+    assert identity.oauth_provider == "google"
+    assert identity.terms_accepted_at == accepted_at
+
+
+def test_without_published_terms_a_provider_sign_up_records_no_acceptance(
+    client: TestClient,
+    oauth_configured: None,
+    signup_open: None,
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    """There is no document to accept, so a ``terms_accepted`` sent anyway records nothing."""
+    stub_exchange(monkeypatch, email="stranger@example.com")
+
+    response = _callback(client, terms_accepted=True)
+
+    assert response.status_code == 200, response.text
+    assert _identity(db_session, "stranger@example.com").terms_accepted_at is None
+
+
 # ---------- the state check, with nothing stubbed but the token endpoint ----------
 
 

@@ -364,7 +364,10 @@ export interface paths {
          *     failure: nobody failed to authenticate, the gateway declined to try.
          *
          *     A sign-in that created the account, or is the first way in to one, is
-         *     reported to ``GrowthSignalPort`` as a signup once it has committed.
+         *     reported to ``GrowthSignalPort`` as a signup once it has committed. Where
+         *     the deployment publishes terms, that sign-in is refused with
+         *     ``terms_not_accepted`` unless the body carries ``terms_accepted``, and
+         *     nothing it would have created is kept.
          */
         post: operations["auth-callback"];
         delete?: never;
@@ -10850,6 +10853,12 @@ export interface components {
              * @description The 'state' from the provider's redirect, as issued by /authorize.
              */
             state: string;
+            /**
+             * Terms Accepted
+             * @description Whether the person accepted this deployment's terms before going to the provider. Required where the bootstrap reports a terms_url and the sign-in creates the account, or is the first way in to one nobody has claimed yet; ignored otherwise.
+             * @default false
+             */
+            terms_accepted: boolean;
         };
         /**
          * OAuthSessionResponse

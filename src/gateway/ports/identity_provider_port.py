@@ -39,7 +39,8 @@ class IdentityResolution:
     """The identity an OAuth sign-in resolved to.
 
     ``new_account`` is true when this sign-in created the account, or is the
-    first way in to one nobody had claimed. The caller reports it as a signup.
+    first way in to one nobody had claimed. The caller reports it as a signup,
+    and holds it to the terms the deployment publishes, so an adapter need not.
     """
 
     identity: User

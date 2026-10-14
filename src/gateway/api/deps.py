@@ -1300,6 +1300,7 @@ def get_identity_service(
         organizations=organizations,
         sign_in_listener=DomainAutoJoinListener(OrganizationDomainRepository(uow), OrganizationMemberRepository(uow)),
         session_ttl_hours=config.dashboard_session_ttl_hours,
+        terms_url=config.terms_url,
     )
 
 
