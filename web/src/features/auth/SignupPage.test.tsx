@@ -353,6 +353,7 @@ describe("the telemetry the signup page records", () => {
 })
 
 describe("OAuth first", () => {
+  const realLocation = window.location
   function stubNavigation() {
     const assign = vi.fn()
     Object.defineProperty(window, "location", {
@@ -373,6 +374,10 @@ describe("OAuth first", () => {
 
   afterEach(() => {
     window.sessionStorage.clear()
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: realLocation,
+    })
   })
 
   it("folds the address form behind a row while a provider is offered", () => {

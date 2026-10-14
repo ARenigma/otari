@@ -76,8 +76,8 @@ afterEach(() => {
   vi.restoreAllMocks()
   window.sessionStorage.clear()
   window.localStorage.clear()
-  // The success path now hands the tab back to "#/", so a test that signs in
-  // would otherwise leave that hash set for the next one.
+  // The success path changes the hash, so a test that signs in would otherwise
+  // leave it set for the next one.
   window.location.hash = ""
 })
 

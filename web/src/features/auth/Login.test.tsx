@@ -1296,6 +1296,7 @@ describe("Login with a passkey", () => {
   })
 
   describe("OAuth sign-in", () => {
+    const realLocation = window.location
     // `window.location.assign` is not implemented in jsdom, and the whole point
     // of the success path is that it leaves the page, so it is stubbed and
     // asserted on rather than allowed to run.
@@ -1310,6 +1311,10 @@ describe("Login with a passkey", () => {
 
     afterEach(() => {
       window.sessionStorage.clear()
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: realLocation,
+      })
     })
 
     it("offers one button per provider the gateway publishes, and none otherwise", () => {
