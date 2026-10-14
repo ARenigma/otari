@@ -28,6 +28,7 @@ from any_llm.types.completion import ChatCompletionChunk, ChoiceDelta, ChunkChoi
 
 from gateway.core.env import otari_env
 from gateway.log_config import logger
+from gateway.models.usage import PLAYGROUND_USAGE_ENDPOINT
 from gateway.services._tool_loop import (
     MaxToolIterationsExceeded,
     StreamAction,
@@ -62,11 +63,13 @@ __all__ = [
     "DEFAULT_MAX_TOOL_ITERATIONS",
     "MAX_TOOL_ITERATIONS_CAP",
     "PURPOSE_HINT_HEADER",
+    "TOOL_ACTIVITY_FIELD",
     "MaxToolIterationsExceeded",
     "ToolBackend",
     "inject_purpose_hints",
     "mcp_tool_loop",
     "mcp_tool_loop_stream",
+    "reports_tool_activity",
 ]
 
 
@@ -347,6 +350,58 @@ def _fold_usage(
         completion.usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cache_read_total)
 
 
+# The field a tool activity chunk carries. The Chat wire has no vocabulary for a
+# gateway-run tool call, so an opted-in stream (the Playground's) reports it in a
+# field of its own, beside ``choices`` for the reason ``otari_tool_calls`` sits
+# there (``services/tools/_chat_tool_calls.py``). In the delta it would also be
+# copied under ``provider_specific_fields``, sending every record twice.
+TOOL_ACTIVITY_FIELD = "otari_tool_activity"
+
+# A tool result can be a whole fetched page; the transcript shows a preview.
+_ACTIVITY_RESULT_LIMIT = 8_000
+_TOOL_ERROR_PREFIX = "[tool error]"
+
+
+def reports_tool_activity(endpoint: str) -> bool:
+    """Whether a completion served at ``endpoint`` streams gateway-run tool activity: the Playground's does."""
+    return endpoint == PLAYGROUND_USAGE_ENDPOINT
+
+
+def _activity_chunk(template: ChatCompletionChunk, payload: dict[str, Any]) -> ChatCompletionChunk:
+    """A content-free chunk carrying one tool activity record, with ``template``'s ``id``, ``model`` and ``created``."""
+    chunk = ChatCompletionChunk(
+        id=template.id,
+        object="chat.completion.chunk",
+        created=template.created,
+        model=template.model,
+        choices=[ChunkChoice(index=0, delta=ChoiceDelta(), finish_reason=None)],
+    )
+    setattr(chunk, TOOL_ACTIVITY_FIELD, payload)
+    return chunk
+
+
+def _call_activity(call: dict[str, Any]) -> dict[str, Any]:
+    function = call.get("function", {})
+    return {
+        "type": "tool_call",
+        "id": call.get("id") or "",
+        "name": function.get("name", ""),
+        "arguments": function.get("arguments") or "",
+    }
+
+
+def _result_activity(call: dict[str, Any], message: dict[str, Any]) -> dict[str, Any]:
+    content = str(message.get("content") or "")
+    return {
+        "type": "tool_result",
+        "id": call.get("id") or "",
+        "name": call.get("function", {}).get("name", ""),
+        "content": content[:_ACTIVITY_RESULT_LIMIT],
+        "truncated": len(content) > _ACTIVITY_RESULT_LIMIT,
+        "is_error": content.startswith(_TOOL_ERROR_PREFIX),
+    }
+
+
 class _ChatStreamState:
     """Per-iteration bookkeeping for the chat streaming loop."""
 
@@ -370,6 +425,9 @@ class _ChatStreamState:
         # official OpenAI client raise IndexError.
         self.visible_tool_index: dict[int, int] = {}
         self.next_visible_tool_index = 0
+        # The round's first upstream chunk: activity chunks copy its id, model and
+        # timestamp so they read as part of the same stream.
+        self.template: ChatCompletionChunk | None = None
 
     def deferred_terminal(self) -> list[ChatCompletionChunk]:
         """The round's held-back chunks, in stream order."""
@@ -390,12 +448,20 @@ class _ChatToolLoopStrategy:
 
     transcript_key = "messages"
 
-    def __init__(self, *, budget: ToolUseBudget | None = None, native_tools: frozenset[str] = frozenset()) -> None:
-        # Absent unless the caller capped the searches, which keeps the shared
-        # instance in ``_strategy_for`` free of per-request state.
+    def __init__(
+        self,
+        *,
+        budget: ToolUseBudget | None = None,
+        native_tools: frozenset[str] = frozenset(),
+        emit_activity: bool = False,
+    ) -> None:
+        # Absent unless the caller capped the searches, is owed a report or asked
+        # for activity, which keeps the shared instance in ``_strategy_for`` free
+        # of per-request state.
         self._budget = budget
         # The gateway-run tools whose calls this request reports in ``otari_tool_calls``.
         self._native_tools = native_tools
+        self._emit_activity = emit_activity
 
     def coerce_transcript(self, value: Any) -> list[Any]:
         return list(value or [])
@@ -508,6 +574,8 @@ class _ChatToolLoopStrategy:
         pool: ToolBackend,
         acc: _ChatTotals,
     ) -> tuple[StreamAction, ChatCompletionChunk]:
+        if state.template is None:
+            state.template = event
         if state.first is None and event.choices:
             state.first = event
         if not event.choices and event.usage is not None:
@@ -652,8 +720,31 @@ class _ChatToolLoopStrategy:
     async def _run_reported(
         self, state: _ChatStreamState, pool: ToolBackend, results: list[dict[str, Any]]
     ) -> AsyncIterator[ChatCompletionChunk]:
-        """Run the round's owned calls into ``results``, with an ``otari_tool_calls`` chunk as each starts and ends."""
-        reports = _run_owned_calls(pool, state.mcp_calls, results, budget=self._budget, native_tools=self._native_tools)
+        """Run the round's owned calls into ``results``, reporting each as it starts and ends.
+
+        Every request gets its ``otari_tool_calls`` chunks; an opted-in one (the
+        Playground's) also gets a :data:`TOOL_ACTIVITY_FIELD` chunk around each call.
+        """
+        template = state.template if self._emit_activity else None
+        if template is None:
+            async for chunk in self._run_calls(state, pool, state.mcp_calls, results):
+                yield chunk
+            return
+        # One call at a time, so each result is reported as soon as it exists
+        # instead of after the slowest call in the batch.
+        for call in state.mcp_calls:
+            yield _activity_chunk(template, _call_activity(call))
+            ran: list[dict[str, Any]] = []
+            async for chunk in self._run_calls(state, pool, [call], ran):
+                yield chunk
+            results.extend(ran)
+            yield _activity_chunk(template, _result_activity(call, ran[0]))
+
+    async def _run_calls(
+        self, state: _ChatStreamState, pool: ToolBackend, calls: list[dict[str, Any]], results: list[dict[str, Any]]
+    ) -> AsyncIterator[ChatCompletionChunk]:
+        """Run ``calls`` into ``results``, with an ``otari_tool_calls`` chunk as each starts and ends."""
+        reports = _run_owned_calls(pool, calls, results, budget=self._budget, native_tools=self._native_tools)
         async with aclosing(reports):
             async for _ended, entries in reports:
                 if entries and state.first is not None:
@@ -663,15 +754,17 @@ class _ChatToolLoopStrategy:
 _CHAT_STRATEGY = _ChatToolLoopStrategy()
 
 
-def _strategy_for(budget: ToolUseBudget | None, native_tools: frozenset[str] = frozenset()) -> _ChatToolLoopStrategy:
-    """The shared strategy, or a per-request one when the caller capped searches or is owed a report.
+def _strategy_for(
+    budget: ToolUseBudget | None, native_tools: frozenset[str] = frozenset(), *, emit_activity: bool = False
+) -> _ChatToolLoopStrategy:
+    """The shared strategy, or a per-request one when the caller capped searches, is owed a report or wants activity.
 
     Only such a request has anything per-request to hold, so every other request
     keeps reusing the single module-level instance.
     """
-    if budget is None and not native_tools:
+    if budget is None and not native_tools and not emit_activity:
         return _CHAT_STRATEGY
-    return _ChatToolLoopStrategy(budget=budget, native_tools=native_tools)
+    return _ChatToolLoopStrategy(budget=budget, native_tools=native_tools, emit_activity=emit_activity)
 
 
 async def mcp_tool_loop_stream(
@@ -681,6 +774,7 @@ async def mcp_tool_loop_stream(
     max_iterations: int,
     use_budget: ToolUseBudget | None = None,
     native_tools: frozenset[str] = frozenset(),
+    emit_activity: bool = False,
 ) -> AsyncGenerator[ChatCompletionChunk, None]:
     """Yield chunks across multiple `acompletion(stream=True)` calls, with MCP execution between rounds.
 
@@ -699,13 +793,17 @@ async def mcp_tool_loop_stream(
       * the iteration ended with a non-``tool_calls`` finish_reason (e.g. ``stop``),
       * the model produced foreign tool_calls (caller needs to dispatch them), or
       * the model produced no MCP-owned calls at all (loop exits, terminal goes through).
+
+    ``emit_activity`` reports each gateway-run call and its result as a chunk
+    carrying :data:`TOOL_ACTIVITY_FIELD`, for a client (the Playground) that
+    shows them. Off, those calls stay invisible on the wire.
     """
     # aclosing makes downstream closes (client disconnect) propagate to the
     # engine generator, and through it to the upstream provider stream,
     # instead of waiting for event-loop async-generator finalization.
     async with aclosing(
         run_tool_loop_stream(
-            strategy=_strategy_for(use_budget, native_tools),
+            strategy=_strategy_for(use_budget, native_tools, emit_activity=emit_activity),
             completion_kwargs=completion_kwargs,
             pool=pool,
             max_iterations=max_iterations,

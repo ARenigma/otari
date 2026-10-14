@@ -79,6 +79,7 @@ from gateway.services.mcp_loop import (
     inject_purpose_hints,
     mcp_tool_loop,
     mcp_tool_loop_stream,
+    reports_tool_activity,
 )
 from gateway.services.provider_kwargs import apply_endpoint_defaults
 from gateway.services.providers import acompletion
@@ -364,6 +365,8 @@ class _ChatAdapter:
             extra["use_budget"] = use_budget
         if native_tools:
             extra["native_tools"] = native_tools
+        if reports_tool_activity(self.endpoint):
+            extra["emit_activity"] = True
         return mcp_tool_loop_stream(
             completion_kwargs=_with_upstream_user(kwargs),
             pool=pool,

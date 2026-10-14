@@ -183,6 +183,9 @@ may be shown about it. See [Web tool calls on Chat
 Completions](api-reference.md#web-tool-calls-on-chat-completions). Code execution
 and MCP calls are not reported there, so Chat Completions returns only the final
 assistant message for them. Calls for tools the client must execute are preserved.
+The dashboard Playground's own completion route is the one exception: its stream
+also reports every gateway-run call and its result in an `otari_tool_activity`
+field beside each chunk's `choices`, so the page can show them.
 
 For gateway-run MCP activity in Messages streams, see
 [Messages streaming activity](mcp.md#messages-streaming-activity).
