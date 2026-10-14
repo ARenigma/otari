@@ -97,6 +97,22 @@ export function publicAuthPath(hash: string): PublicAuthPath | null {
     : null
 }
 
+/**
+ * Whether `App.tsx`'s `DeploymentRoot` renders this path itself, ahead of the
+ * router: the accept-invitation page and every public auth page.
+ */
+export function rendersAheadOfRouter(pathname: string): boolean {
+  return isAcceptInvitationPath(pathname) || publicAuthPath(pathname) !== null
+}
+
+/**
+ * Whether a hash or a pathname names the accept-invitation page, matched on
+ * the path alone as `publicAuthPath` matches, so its `?token=…` is ignored.
+ */
+export function isAcceptInvitationPath(hashOrPath: string): boolean {
+  return hashOrPath.replace(/^#/, "").split("?")[0] === "/accept-invitation"
+}
+
 /** Which provider an OAuth callback path finishes, or null for any other page. */
 export function oauthCallbackProvider(path: PublicAuthPath): string | null {
   const match = /^\/auth\/([^/]+)\/callback$/.exec(path)

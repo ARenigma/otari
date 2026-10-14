@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { DeploymentType } from "@/client"
 import { AuthProvider } from "@/features/auth/AuthContext"
+import { readSignInAddress } from "@/features/auth/signInAddress"
 import { AcceptInvitationPage } from "@/features/invitations/AcceptInvitationPage"
 import { ApiError, apiFetch } from "@/shared/api/client"
 import { DeploymentProvider } from "@/shared/hooks/useDeployment"
@@ -30,6 +31,10 @@ function mockApi(opts: {
   verificationPending?: boolean
   previewError?: string
   acceptError?: string
+  /** Whose session this browser holds; omitted, the profile read 404s. */
+  sessionEmail?: string
+  /** A status the profile read fails with instead. */
+  profileStatus?: number
 }) {
   const accepted: unknown[] = []
   vi.mocked(apiFetch).mockImplementation(async (path, init) => {
@@ -44,6 +49,21 @@ function mockApi(opts: {
         role: "admin",
         expires_at: "2026-01-08T00:00:00+00:00",
         needs_password: opts.needsPassword ?? false,
+      } as never
+    }
+    if (url === "/auth/profile") {
+      if (opts.profileStatus !== undefined) {
+        throw new ApiError(opts.profileStatus, "Internal server error")
+      }
+      if (opts.sessionEmail === undefined) {
+        throw new ApiError(404, "Not Found")
+      }
+      return {
+        user_id: "33333333-3333-3333-3333-333333333333",
+        email: opts.sessionEmail,
+        full_name: null,
+        has_password: true,
+        claims_deployment: false,
       } as never
     }
     if (url === "/invitations/accept") {
@@ -107,6 +127,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   window.location.hash = ""
   window.localStorage.clear()
+  window.sessionStorage.clear()
 })
 
 describe("AcceptInvitationPage", () => {
@@ -121,9 +142,11 @@ describe("AcceptInvitationPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Accept invitation" }))
 
-    expect(
-      await screen.findByText(/You're now a member of/),
-    ).toBeInTheDocument()
+    // Named by address, since the membership goes to the invited address
+    // whoever accepted it.
+    expect(await screen.findByText(/is now a member of/)).toHaveTextContent(
+      "ada@example.com is now a member of Acme, with the admin role.",
+    )
     expect(accepted).toEqual([{ token: "abc123" }])
   })
 
@@ -293,7 +316,7 @@ describe("AcceptInvitationPage", () => {
 
   it("sends an already signed-in visitor to the dashboard instead", async () => {
     window.localStorage.setItem(SESSION_MARKER, "1")
-    mockApi({})
+    mockApi({ sessionEmail: "Ada@Example.com" })
     const user = userEvent.setup()
     renderPage("#/accept-invitation?token=abc123")
 
@@ -306,6 +329,97 @@ describe("AcceptInvitationPage", () => {
       screen.getByRole("button", { name: "Go to the dashboard" }),
     )
     expect(window.location.hash).toBe("#/")
+  })
+
+  it("tells a session for another address who the invitation is for", async () => {
+    window.localStorage.setItem(SESSION_MARKER, "1")
+    const accepted = mockApi({ sessionEmail: "bob@example.com" })
+    const user = userEvent.setup()
+    renderPage("#/accept-invitation?token=abc123")
+
+    expect(
+      await screen.findByText(/This invitation is for ada@example.com/),
+    ).toHaveTextContent("you're signed in as bob@example.com")
+    expect(
+      screen.queryByRole("button", { name: "Accept invitation" }),
+    ).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", { name: "Sign out and continue" }),
+    )
+
+    // Signed out, the page is the one the link was meant for.
+    expect(
+      await screen.findByRole("button", { name: "Accept invitation" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/signed in as/)).toBeNull()
+    expect(accepted).toEqual([])
+  })
+
+  it("treats a session whose address cannot be read as someone else's", async () => {
+    // The profile 404s on a gateway older than the route, so whose session
+    // this is cannot be known, and "you're already signed in" would be a guess.
+    window.localStorage.setItem(SESSION_MARKER, "1")
+    const accepted = mockApi({})
+    renderPage("#/accept-invitation?token=abc123")
+
+    expect(
+      await screen.findByText(/This invitation is for ada@example.com/),
+    ).toHaveTextContent("you're signed in as someone else")
+    expect(
+      screen.getByRole("button", { name: "Sign out and continue" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Accept invitation" }),
+    ).toBeNull()
+    expect(accepted).toEqual([])
+  })
+
+  it("holds every action when whose session this is cannot be read", async () => {
+    window.localStorage.setItem(SESSION_MARKER, "1")
+    mockApi({ profileStatus: 500 })
+    renderPage("#/accept-invitation?token=abc123")
+
+    expect(await screen.findByText("Internal server error")).toBeInTheDocument()
+    expect(screen.getByText("Acme")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Accept invitation" }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Sign out and continue" }),
+    ).toBeNull()
+    expect(screen.queryByText(/already signed in/i)).toBeNull()
+  })
+
+  it("offers no password for somebody else's address to a session", async () => {
+    window.localStorage.setItem(SESSION_MARKER, "1")
+    mockApi({ sessionEmail: "bob@example.com", needsPassword: true })
+    renderPage("#/accept-invitation?token=abc123")
+
+    expect(
+      await screen.findByText(/This invitation is for ada@example.com/),
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText("Password")).toBeNull()
+  })
+
+  it("hands the invited address to the sign-in screen", async () => {
+    mockApi({ needsPassword: true })
+    const user = userEvent.setup()
+    renderPage("#/accept-invitation?token=abc123")
+
+    await user.type(await screen.findByLabelText("Password"), "a-long-password")
+    await user.type(
+      screen.getByLabelText("Confirm password"),
+      "a-long-password",
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Accept and set password" }),
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Go to sign in" }),
+    )
+
+    expect(readSignInAddress()).toBe("ada@example.com")
   })
 
   it("keeps the next step when a refetch finds the token spent", async () => {

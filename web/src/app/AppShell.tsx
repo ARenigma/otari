@@ -30,6 +30,7 @@ import {
   navItemForPath,
   navLabelForPath,
   ORG_NAV_SECTIONS,
+  pageLabelForPath,
   visibleNavSections,
 } from "@/app/nav/registry"
 import {
@@ -57,18 +58,16 @@ import { FeedbackDialog } from "@/features/feedback/FeedbackDialog"
 import { PricingWarning } from "@/features/models/PricingWarning"
 import { UnpricedUsageWarning } from "@/features/models/UnpricedUsageWarning"
 import { canManage } from "@/features/organization/roles"
-import { useOrganizationContext } from "@/shared/api/organizations"
+import {
+  isNoOrganizationError,
+  useOrganizationContext,
+} from "@/shared/api/organizations"
 import { useSelectedWorkspace } from "@/shared/hooks/SelectedWorkspace"
 import { useDeployment } from "@/shared/hooks/useDeployment"
 import { useDocumentTitle } from "@/shared/hooks/useDocumentTitle"
 import { useEntitlements } from "@/shared/hooks/useEntitlements"
 import { TELEMETRY_EVENTS } from "@/shared/telemetry/events"
 import { useTelemetry } from "@/shared/telemetry/overlayTelemetry"
-
-const CHROME_TITLES: Record<string, string | undefined> = {
-  "/docs": "Documentation",
-  "/account": "Account",
-}
 
 // One width, not a range. The rail used to be draggable between 200 and 480px
 // and to remember where it was left; it is now the design's 264px, or 72px
@@ -500,7 +499,7 @@ function AppShellChrome() {
   const recordNavigation = useRecordNavigation()
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  useDocumentTitle(navLabelForPath(pathname) ?? CHROME_TITLES[pathname])
+  useDocumentTitle(pageLabelForPath(pathname))
   // A gated-off destination is still reachable by bookmark or shared URL, so the
   // shell answers those with a panel instead of a page whose every request the
   // server would refuse. An unregistered path (the guide, the 404 splat) has no
@@ -558,8 +557,11 @@ function AppShellChrome() {
   // budgets and settings are reachable only through this entry, the routes still
   // work by URL, and the server authorizes every request behind it regardless.
   // Hiding the way there because one query failed strands three destinations.
+  // A 404 is not a failure but the answer that there is no organization to
+  // manage.
   const managesOrganization =
-    canManage(organization.data) || organization.isError
+    canManage(organization.data) ||
+    (organization.isError && !isNoOrganizationError(organization.error))
 
   // Both rails remember where you were, so the controls that cross between them
   // return you rather than resetting you. Recorded here rather than on those
@@ -953,7 +955,10 @@ function AppShellChrome() {
                 )}
               </div>
             ) : (
-              <WorkspaceSwitcher isCollapsed={effectiveCollapsed} />
+              <WorkspaceSwitcher
+                isCollapsed={effectiveCollapsed}
+                onNavigate={closeMobileNav}
+              />
             )}
           </div>
           {/* No bottom padding: the account band closes the rail, so it sits on
