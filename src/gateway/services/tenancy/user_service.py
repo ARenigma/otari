@@ -268,6 +268,7 @@ async def create_user_for_signup(
     email: str,
     password: str,
     uow: UnitOfWork,
+    organizations: OrganizationService,
     membership_listener: MembershipListener,
     workspace_listener: WorkspaceListener,
     full_name: str | None = None,
@@ -289,6 +290,8 @@ async def create_user_for_signup(
     A refusal writes nothing and mails nothing, so it does not reveal which addresses hold an account.
     An address that has a password, an address that is already verified, and a deactivated identity are refused.
     An unknown address is registered where ``open_signup`` is on, and refused otherwise.
+    Where it is off, an identity with no active membership and no invitation it can still accept is refused too:
+    revoking, declining or outliving an invitation leaves the identity behind, and the roster no longer holds it.
     A verified address is refused because a password set on it would sign in with no proof of the mailbox.
     A deactivated identity is refused so that no password or verification token waits on it for a reactivation.
     ``password`` is validated before the lookup, so a policy violation answers the same for every address.
@@ -345,6 +348,10 @@ async def create_user_for_signup(
                     await verify_absent_password_async(password)
                     raise _SignupRaceLostError
                 identity = registration.identity
+            elif not config.open_signup and not await organizations.has_live_membership(identity.id):
+                # Checked in the block that writes the claim, so the roster cannot drop the identity in between.
+                await verify_absent_password_async(password)
+                return None
 
             token = generate_token()
             values: dict[str, str | datetime | None] = {
