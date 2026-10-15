@@ -78,6 +78,7 @@ from gateway.api.deps import (
     FileServiceDep,
     ModelProviderPortDep,
     PlaygroundToolOfferDep,
+    RequestSessionBillingPortDep,
     ToolPortsDep,
     WorkspaceCodeExecutionPoliciesDep,
     get_config,
@@ -204,6 +205,7 @@ async def playground_chat_completions(
     model_provider: ModelProviderPortDep,
     tool_ports: ToolPortsDep,
     key_format: ApiKeyFormatPortDep,
+    billing: RequestSessionBillingPortDep,
     workspace_id: Annotated[uuid.UUID | None, _WORKSPACE_QUERY] = None,
 ) -> ChatCompletion | Response:
     """Run one chat completion for the signed-in caller.
@@ -255,6 +257,9 @@ async def playground_chat_completions(
         config=config,
         log_writer=log_writer,
         model_provider=model_provider,
+        # On this route's own ``get_db`` session, which ``BillingPortDep`` is not:
+        # a deployment-paid charge has to land in the commit that settles on ``db``.
+        billing=billing,
         session_principal=principal,
     )
 
