@@ -78,9 +78,12 @@ from gateway.services.agent_telemetry_service import (
 )
 from gateway.services.agent_telemetry_service import ingest as ingest_telemetry
 from gateway.services.external_usage_service import (
+    CLAUDE_SCOPE_PREFIX,
+    CLAUDE_SOURCE,
     MAX_EVENTS_PER_BATCH,
     ExternalEventsRequest,
     ExternalUsageEvent,
+    claude_usage_events,
     ingest_external_events,
     is_reserved_source,
 )
@@ -299,7 +302,7 @@ def _build_event(
     """
     provider: Any
     duration: Any
-    # No OTLP shape carries the 5m/1h cache-write split, so every cache write stays in
+    # No GenAI or Claude Code OTLP shape carries the 5m/1h cache-write split, so every cache write stays in
     # the base (5m) bucket. Claude Code writes with both TTLs (measured on real session
     # transcripts, roughly a quarter to a third of creation tokens are 5m and the rest
     # 1h), so either default is wrong for the other share: 5m undercharges the 1h
@@ -522,11 +525,26 @@ async def receive_traces(
     received: list[Any] = []
     for resource_spans in parsed.resource_spans:
         for scope_spans in resource_spans.scope_spans:
+            scope = scope_spans.scope.name
+            claude = scope.startswith(CLAUDE_SCOPE_PREFIX)
             for span in scope_spans.spans:
                 received.append(span)
                 duration = None
                 if span.start_time_unix_nano and span.end_time_unix_nano:
                     duration = (span.end_time_unix_nano - span.start_time_unix_nano) / 1_000_000
+                if claude:
+                    attrs = _attributes(span.attributes)
+                    events = claude_usage_events(
+                        span.name,
+                        attrs,
+                        scope=scope,
+                        span_key=f"{span.trace_id.hex()}:{span.span_id.hex()}",
+                        timestamp=_resolve_timestamp(attrs, _nanos_to_dt(span.start_time_unix_nano)),
+                        duration_ms=duration,
+                        failed=span.status.code == _STATUS_CODE_ERROR,
+                    )
+                    pairs.extend((CLAUDE_SOURCE, event) for event in events)
+                    continue
                 mapped = _build_event(
                     _attributes(span.attributes),
                     fallback_event_id=span.span_id.hex() or None,
