@@ -6542,7 +6542,7 @@ export interface components {
         };
         /**
          * AcceptedSnapshotResponse
-         * @description One accepted genai-prices snapshot in the history.
+         * @description One accepted models.dev snapshot in the history.
          */
         AcceptedSnapshotResponse: {
             /**
@@ -13087,7 +13087,7 @@ export interface components {
         };
         /**
          * PricingRefreshConfirmationResponse
-         * @description Result of activating a reviewed genai-prices refresh.
+         * @description Result of activating a reviewed models.dev refresh.
          */
         PricingRefreshConfirmationResponse: {
             /**
@@ -13098,7 +13098,7 @@ export interface components {
         };
         /**
          * PricingRefreshPreviewResponse
-         * @description Reviewable summary of a pending genai-prices refresh.
+         * @description Reviewable summary of a pending models.dev refresh.
          */
         PricingRefreshPreviewResponse: {
             /** Added Count */
@@ -13110,14 +13110,31 @@ export interface components {
             /** Changes Truncated */
             changes_truncated: boolean;
             /**
+             * Digest
+             * @description Identity of the pending snapshot; send it to confirm or reject to act on exactly this one.
+             * @default
+             */
+            digest: string;
+            /**
              * Fetched At
              * Format: date-time
              */
             fetched_at: string;
+            /**
+             * Needs Review
+             * @description True when the update is implausibly large; the scheduled `auto` policy leaves it pending.
+             * @default false
+             */
+            needs_review: boolean;
             /** Protected Model Count */
             protected_model_count: number;
             /** Removed Count */
             removed_count: number;
+            /**
+             * Review Reason
+             * @description Why the update needs review.
+             */
+            review_reason?: string | null;
         };
         /**
          * PricingResponse
@@ -23854,7 +23871,10 @@ export interface operations {
     };
     "pricing-confirm_pricing_refresh": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The `digest` of the previewed snapshot; 409 when the pending one differs. */
+                digest?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -23868,6 +23888,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PricingRefreshConfirmationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -23894,7 +23923,10 @@ export interface operations {
     };
     "pricing-reject_pricing_refresh": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The `digest` of the previewed snapshot; 409 when the pending one differs. */
+                digest?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -23907,6 +23939,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
