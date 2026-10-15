@@ -1197,6 +1197,17 @@ def get_model_provider_port(db: PortSessionDep, container: ContainerDep) -> Mode
     return container.resolve(ModelProviderPort, db)
 
 
+# ``get_db`` rather than ``PortSessionDep``, for a route or builder whose own
+# session is ``get_db``: FastAPI caches a dependency per callable, so naming the
+# same one hands the adapter that session instead of opening a second one.
+def get_request_session_model_provider_port(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    container: ContainerDep,
+) -> ModelProviderPort:
+    """Resolve the model-provider adapter on the request's ``get_db`` session."""
+    return container.resolve(ModelProviderPort, db)
+
+
 # Deliberately ``get_db`` and not ``PortSessionDep``: every surface that
 # resolves this port (the OTLP receiver, the telemetry read and purge
 # endpoints, user deletion) is standalone-only and already holds a session from
@@ -1361,6 +1372,7 @@ GrowthSignalPortDep = Annotated[GrowthSignalPort, Depends(get_growth_signal_port
 IdentityProviderPortDep = Annotated[IdentityProviderPort, Depends(get_identity_provider_port)]
 McpServerPortDep = Annotated[McpServerPort, Depends(get_mcp_server_port)]
 ModelProviderPortDep = Annotated[ModelProviderPort, Depends(get_model_provider_port)]
+RequestSessionModelProviderPortDep = Annotated[ModelProviderPort, Depends(get_request_session_model_provider_port)]
 
 
 def get_identity_service(
@@ -1391,7 +1403,7 @@ def get_org_provider_model_service(
     db: Annotated[AsyncSession, Depends(get_db)],
     uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
     config: Annotated[GatewayConfig, Depends(get_config)],
-    model_provider: ModelProviderPortDep,
+    model_provider: RequestSessionModelProviderPortDep,
 ) -> OrgProviderModelService:
     """Build the offered-models service on the request's session and unit of work.
 
@@ -1707,6 +1719,7 @@ __all__ = [
     "ModelProviderPortDep",
     "OrgProviderModelServiceDep",
     "RateLimitServiceDep",
+    "RequestSessionModelProviderPortDep",
     "TelemetryStoragePortDep",
     "ToolPorts",
     "ToolPortsDep",

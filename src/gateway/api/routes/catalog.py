@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from gateway.api.deps import (
-    ModelProviderPortDep,
+    RequestSessionModelProviderPortDep,
     get_config,
     get_db,
     get_session_identity,
@@ -334,7 +334,7 @@ class SelectorIndexResponse(BaseModel):
 async def refresh_selector_index(
     db: Annotated[AsyncSession, Depends(get_db)],
     config: Annotated[GatewayConfig, Depends(get_config)],
-    model_provider: ModelProviderPortDep,
+    model_provider: RequestSessionModelProviderPortDep,
 ) -> SelectorIndexResponse:
     """Re-index the short spellings now, rather than on the refresher's next tick."""
     await rebuild_selector_index(db, config, model_provider=model_provider, fetch=True)
@@ -571,7 +571,7 @@ async def list_catalog(
     config: Annotated[GatewayConfig, Depends(get_config)],
     caller: Annotated[CatalogCaller, Depends(verify_catalog_reader_or_public)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
-    model_provider: ModelProviderPortDep,
+    model_provider: RequestSessionModelProviderPortDep,
     query: Annotated[CatalogQuery, Query()],
 ) -> CatalogResponse:
     """The models this caller may use, one entry each however many providers serve it.
@@ -611,7 +611,7 @@ async def get_catalog_model(
     config: Annotated[GatewayConfig, Depends(get_config)],
     caller: Annotated[CatalogCaller, Depends(verify_catalog_reader_or_public)],
     session_identity: Annotated[TenancyUser | None, Depends(get_session_identity)],
-    model_provider: ModelProviderPortDep,
+    model_provider: RequestSessionModelProviderPortDep,
 ) -> CatalogModelDetail:
     """One model and every offering of it this caller may use.
 
