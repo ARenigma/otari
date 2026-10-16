@@ -59,6 +59,7 @@ const provider = (
   error: null,
   discovery_unsupported: false,
   credential_unreadable: false,
+  source: "database",
   ...patch,
 })
 
@@ -73,6 +74,12 @@ const sweep = (patch: Partial<CatalogRefresh>): CatalogRefresh => ({
 })
 
 describe("catalogRefreshOutcome", () => {
+  it("names the model lists it dropped", () => {
+    expect(catalogRefreshOutcome(sweep({ orphaned_rosters: ["openai"] }))).toBe(
+      "Dropped the model lists of providers nothing configures any more: openai.",
+    )
+  })
+
   it("says so when the catalog already matches the page", () => {
     expect(catalogRefreshOutcome(sweep({}))).toBe(
       "Nothing to change: the catalog already matches this page.",
@@ -150,6 +157,23 @@ describe("catalogRefreshFailures", () => {
     ])
   })
 
+  it("does not offer removal for a provider defined in configuration", () => {
+    // No delete reaches it, whatever page of the provider list it is on.
+    const result = sweep({
+      providers: [
+        provider({ error: "The key was refused.", source: "config" }),
+      ],
+    })
+
+    expect(catalogRefreshFailures(result)).toEqual([
+      {
+        provider: "nebius",
+        message: "nebius: The key was refused.",
+        offerRemoval: false,
+      },
+    ])
+  })
+
   it("does not offer removal for a key this process cannot decrypt", () => {
     // The message tells the operator to re-enter the credential; offering to
     // destroy it in the same paragraph would be the opposite advice.
@@ -189,6 +213,25 @@ describe("catalogRefreshFailures", () => {
 })
 
 describe("catalogPreviewOutcome", () => {
+  it("names the model lists nothing configures any more", () => {
+    expect(catalogPreviewOutcome(sweep({ orphaned_rosters: ["openai"] }))).toBe(
+      "The model lists of providers nothing configures any more will be dropped: openai.",
+    )
+    expect(
+      catalogPreviewOutcome(
+        sweep({
+          removed: ["openai:o3"],
+          removed_count: 1,
+          removed_price_rows: 1,
+          orphaned_rosters: ["openai", "groq"],
+        }),
+      ),
+    ).toBe(
+      "1 model will be removed, taking 1 stored rate and 0 organization overrides with it. " +
+        "The model lists of providers nothing configures any more will be dropped: openai, groq.",
+    )
+  })
+
   it("says so when there is nothing to remove", () => {
     expect(catalogPreviewOutcome(sweep({}))).toBe(
       "Nothing to remove: every priced model has something serving it.",

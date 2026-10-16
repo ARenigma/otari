@@ -1563,6 +1563,9 @@ export interface paths {
         /**
          * List Hosted Providers
          * @description List the providers this deployment serves hosted inference on.
+         *
+         *     Stored providers and those defined in the configuration's
+         *     ``hosted_providers:`` block alike, each marked with its ``source``.
          */
         get: operations["hosted-providers-list_hosted_providers"];
         put?: never;
@@ -1571,7 +1574,9 @@ export interface paths {
          * @description Configure a provider with the key this deployment will serve it on.
          *
          *     Everything the provider lists on that key is offered at once; a provider
-         *     that will not say yields a provider with no models, not an error.
+         *     that will not say yields a provider with no models, not an error. A
+         *     provider the configuration defines may be created too, and the stored one
+         *     then serves instead.
          */
         post: operations["hosted-providers-create_hosted_provider"];
         delete?: never;
@@ -1595,7 +1600,11 @@ export interface paths {
          *
          *     The whole deployment rather than one provider: a stored price is what puts a
          *     model on a tenant's Models page, and a price under a provider nothing here
-         *     serves cannot be reached by a per-provider refresh. Declared before the
+         *     serves cannot be reached by a per-provider refresh. A model list whose
+         *     provider nothing defines any more, such as a removed ``config.yml`` entry,
+         *     goes too, and is named in ``orphaned_rosters``. Where no provider offers a
+         *     model, only those lists go and every price stays; with none of them either,
+         *     the sweep answers 409. Declared before the
          *     ``/{provider}`` paths to read in the order the surface is used; no method
          *     collides in any case.
          */
@@ -1643,6 +1652,10 @@ export interface paths {
         /**
          * Delete Hosted Provider
          * @description Remove a provider and its roster, leaving the runtime with no hosted path for it.
+         *
+         *     A provider defined in configuration answers 409. A stored provider that
+         *     overrides a configured one keeps the roster, which the configured one
+         *     serves again.
          */
         delete: operations["hosted-providers-delete_hosted_provider"];
         options?: never;
@@ -1650,6 +1663,8 @@ export interface paths {
         /**
          * Update Hosted Provider
          * @description Rotate the key, repoint the base, or turn a provider off.
+         *
+         *     A provider defined in configuration answers 409: it is changed there.
          */
         patch: operations["hosted-providers-update_hosted_provider"];
         trace?: never;
@@ -1663,7 +1678,7 @@ export interface paths {
         };
         /**
          * List Available Models
-         * @description Ask the provider what it serves on the stored credential.
+         * @description Ask the provider what it serves on its credential.
          *
          *     Dials the upstream on every call rather than caching: the caller is the
          *     admin form's model picker, opened rarely and entitled to a current answer.
@@ -10397,6 +10412,12 @@ export interface components {
             provider: string;
             /** Repriced */
             repriced?: string[];
+            /**
+             * Source
+             * @default database
+             * @enum {string}
+             */
+            source: "database" | "config";
         };
         /**
          * HostedCatalogRefreshPublic
@@ -10404,11 +10425,15 @@ export interface components {
          *
          *     ``removed`` is a sample and ``removed_count`` the total, so a deployment
          *     that has never been swept does not answer one button press with a few
-         *     thousand strings.
+         *     thousand strings. ``orphaned_rosters`` names the providers that still have
+         *     a model list but nothing defining them, such as a removed ``config.yml``
+         *     entry: nothing serves them, and an apply deletes their model lists.
          */
         HostedCatalogRefreshPublic: {
             /** Kept */
             kept: components["schemas"]["HostedCatalogKeptGroupPublic"][];
+            /** Orphaned Rosters */
+            orphaned_rosters?: string[];
             /** Providers */
             providers: components["schemas"]["HostedCatalogProviderRefreshPublic"][];
             /** Removed */
@@ -10595,6 +10620,13 @@ export interface components {
          *     known by its last four characters and nothing else, ``client_args`` goes
          *     out with credential-shaped values masked, and ``api_base`` with the
          *     password in its userinfo and its query values masked.
+         *
+         *     ``source`` says where the provider is defined. A ``config`` provider comes
+         *     from the ``hosted_providers:`` block, has no row and so no ``id`` or
+         *     timestamps, and is changed by editing the configuration rather than through
+         *     this API; its models are administered as a stored provider's are.
+         *     ``shadows_config`` marks a stored provider that wins over a configuration
+         *     entry of the same provider, which serves again once the row is deleted.
          */
         HostedProviderPublic: {
             /** Api Base */
@@ -10605,22 +10637,27 @@ export interface components {
             client_args?: {
                 [key: string]: unknown;
             } | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
+            /** Created At */
+            created_at?: string | null;
             /** Enabled */
             enabled: boolean;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
+            /** Id */
+            id?: string | null;
             /** Provider */
             provider: string;
             /** Restricted To Organization Id */
             restricted_to_organization_id?: string | null;
+            /**
+             * Shadows Config
+             * @default false
+             */
+            shadows_config: boolean;
+            /**
+             * Source
+             * @default database
+             * @enum {string}
+             */
+            source: "database" | "config";
             /** Updated At */
             updated_at?: string | null;
         };

@@ -47,7 +47,9 @@ class HostedCredential:
     carrying an empty key.
     """
 
-    api_key: str
+    # None for a keyless self-hosted backend (vLLM, Ollama), which any-llm
+    # calls without one.
+    api_key: str | None
     api_base: str | None
     response_provider: str
     # What the upstream SDK client needs beyond the key (Bedrock's region and
@@ -89,6 +91,11 @@ class ModelProviderPort(Protocol):
         ``None`` for a caller with no workspace context; it is attribution
         only, never part of the access decision, which keys on
         ``organization_id`` alone.
+
+        Also asked about a provider any-llm calls with no key (vLLM, Ollama,
+        Bedrock) when nothing configures it. For one of those only an answer
+        whose ``response_provider`` is ``provider`` serves; another, a refusal
+        or a failure leaves the request to go out as it would have.
 
         Returns:
             ``None`` when this build has no hosted-inference path for this

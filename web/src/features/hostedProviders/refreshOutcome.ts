@@ -5,6 +5,13 @@ const plural = (count: number, one: string, many: string) =>
 
 type HostedProviderReport = HostedCatalogRefresh["providers"][number]
 
+/** The providers whose model lists outlived whatever defined them, such as a removed `config.yml` entry. */
+function orphanedRosters(result: HostedCatalogRefresh): string | undefined {
+  const orphaned = result.orphaned_rosters ?? []
+  if (orphaned.length === 0) return undefined
+  return orphaned.join(", ")
+}
+
 /**
  * One sentence for what a refresh did. A refusal comes back in the body rather
  * than thrown, so it is worded here too.
@@ -35,6 +42,7 @@ export function catalogRefreshOutcome(result: HostedCatalogRefresh): string {
     result.providers.reduce((sum, provider) => sum + pick(provider).length, 0)
   const added = total((provider) => provider.added)
   const repriced = total((provider) => provider.repriced ?? [])
+  const orphaned = orphanedRosters(result)
   const parts = [
     added > 0
       ? `Offered ${plural(added, "new model", "new models")}.`
@@ -45,6 +53,9 @@ export function catalogRefreshOutcome(result: HostedCatalogRefresh): string {
     result.removed_count > 0
       ? `Removed ${plural(result.removed_count, "model", "models")} nothing here serves.`
       : undefined,
+    orphaned === undefined
+      ? undefined
+      : `Dropped the model lists of providers nothing configures any more: ${orphaned}.`,
   ].filter((part) => part !== undefined)
   return parts.length > 0
     ? parts.join(" ")
@@ -58,8 +69,15 @@ export function catalogRefreshOutcome(result: HostedCatalogRefresh): string {
  * because naming them is the whole reason the preview exists.
  */
 export function catalogPreviewOutcome(result: HostedCatalogRefresh): string {
+  const orphaned = orphanedRosters(result)
+  const lists =
+    orphaned === undefined
+      ? undefined
+      : `The model lists of providers nothing configures any more will be dropped: ${orphaned}.`
   if (result.removed_count === 0) {
-    return "Nothing to remove: every priced model has something serving it."
+    return (
+      lists ?? "Nothing to remove: every priced model has something serving it."
+    )
   }
   const rates = plural(result.removed_price_rows, "stored rate", "stored rates")
   const overrides = plural(
@@ -68,10 +86,10 @@ export function catalogPreviewOutcome(result: HostedCatalogRefresh): string {
     "organization overrides",
   )
   const them = result.removed_count === 1 ? "it" : "them"
-  return (
+  const models =
     `${plural(result.removed_count, "model", "models")} will be removed, ` +
     `taking ${rates} and ${overrides} with ${them}.`
-  )
+  return lists === undefined ? models : `${models} ${lists}`
 }
 
 /** A provider a sweep could not read, and whether it is worth removing. */
@@ -86,6 +104,8 @@ export interface CatalogFailure {
    * deleting would be the wrong advice: a provider with no model listing serves
    * requests perfectly well and simply cannot be asked what it offers, and a
    * key this process cannot decrypt wants re-entering rather than destroying.
+   * Never for a provider defined in configuration, which no delete reaches;
+   * the sweep says which it is, so the answer does not hang on the list page.
    */
   offerRemoval: boolean
 }
@@ -101,6 +121,9 @@ export function catalogRefreshFailures(
       message: provider.error
         ? `${provider.provider}: ${provider.error}`
         : `${provider.provider} cannot list its models, so nothing new was offered.`,
-      offerRemoval: Boolean(provider.error) && !provider.credential_unreadable,
+      offerRemoval:
+        Boolean(provider.error) &&
+        !provider.credential_unreadable &&
+        provider.source !== "config",
     }))
 }

@@ -55,16 +55,6 @@ class HostedProviderRepository(BaseRepository[HostedProvider, Never, Never]):
         result = await self.db.execute(select(HostedProvider).where(HostedProvider.provider == provider))
         return result.scalar_one_or_none()
 
-    async def list_page(self, *, skip: int = 0, limit: int = 100) -> tuple[Sequence[HostedProvider], int]:
-        """One page of hosted providers by name, and how many there are in total."""
-        rows = (
-            (await self.db.execute(select(HostedProvider).order_by(HostedProvider.provider).offset(skip).limit(limit)))
-            .scalars()
-            .all()
-        )
-        total = (await self.db.execute(select(func.count()).select_from(HostedProvider))).scalar_one()
-        return rows, total
-
     async def list_all(self) -> Sequence[HostedProvider]:
         """Every hosted provider, bounded by the number of providers any-llm knows."""
         result = await self.db.execute(select(HostedProvider).order_by(HostedProvider.provider).limit(_ALL_PROVIDERS))
@@ -162,10 +152,22 @@ class HostedProviderModelRepository(BaseRepository[HostedProviderModel, Never, N
         )
         return set(result.scalars().all())
 
-    async def offered_keys(self) -> set[str]:
-        """Every offered model as a ``provider:model`` key, across every provider and both switch states."""
-        result = await self.db.execute(select(HostedProviderModel.provider, HostedProviderModel.model))
+    async def offered_keys(self, providers: Collection[str]) -> set[str]:
+        """Every model offered under the named providers as a ``provider:model`` key, in both switch states."""
+        wanted = set(providers)
+        if not wanted:
+            return set()
+        result = await self.db.execute(
+            select(HostedProviderModel.provider, HostedProviderModel.model).where(
+                HostedProviderModel.provider.in_(wanted)
+            )
+        )
         return {f"{provider}:{model}" for provider, model in result.all()}
+
+    async def rostered_providers(self) -> set[str]:
+        """Every provider name with at least one offered row, whether or not anything still defines it."""
+        result = await self.db.execute(select(HostedProviderModel.provider).distinct())
+        return set(result.scalars().all())
 
     async def enabled_models_for_providers(self, providers: Collection[str]) -> dict[str, set[str]]:
         """The served models of each named provider. A provider absent from the result serves none."""

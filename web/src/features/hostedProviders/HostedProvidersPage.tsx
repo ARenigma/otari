@@ -49,6 +49,10 @@ import {
 // A provider kept to one organization shows which; the restriction is set and
 // lifted through the API, since this build has no deployment-wide list of
 // organizations to pick one from.
+//
+// A provider defined in the configuration's `hosted_providers:` block is listed
+// with a `config.yml` badge and changed only there: its key, endpoint and switch
+// are read-only here, while its models are administered as any other's.
 
 /**
  * What the last sweep did, stated rather than implied by the table redrawing.
@@ -235,6 +239,7 @@ function HostedProvidersContent() {
   }
 
   const rows = providers.data?.data ?? []
+  const deleting = rows.find((row) => row.provider === pendingDelete)
   const editing = rows.find((row) => row.provider === editingProvider)
   const expanded = rows.find((row) => row.provider === modelsFor)
   // A failed list is not an empty one: rendering "none configured" over a 500
@@ -246,7 +251,17 @@ function HostedProvidersContent() {
       id: "provider",
       header: "Provider",
       isRowHeader: true,
-      cell: (row) => row.provider,
+      cell: (row) => (
+        <span className="flex flex-wrap items-center gap-2">
+          {row.provider}
+          {row.source === "config" ? (
+            <Badge tone="muted">config.yml</Badge>
+          ) : null}
+          {row.shadows_config ? (
+            <Badge tone="muted">Overrides config.yml</Badge>
+          ) : null}
+        </span>
+      ),
     },
     {
       id: "key",
@@ -289,8 +304,10 @@ function HostedProvidersContent() {
       cell: (row) => (
         <Toggle
           isSelected={row.enabled}
+          // A configured provider is switched in the configuration.
           isDisabled={
-            update.isPending && update.variables?.provider === row.provider
+            row.source === "config" ||
+            (update.isPending && update.variables?.provider === row.provider)
           }
           label={`Serve traffic on ${row.provider}`}
           onChange={(enabled) =>
@@ -315,21 +332,25 @@ function HostedProvidersContent() {
               )
             }
           />
-          <RowAction
-            icon={FiEdit2}
-            label="Edit"
-            ariaLabel={`Edit ${row.provider}`}
-            onPress={() => {
-              setIsAdding(false)
-              setEditingProvider(row.provider)
-            }}
-          />
-          <RowAction
-            icon={FiTrash2}
-            label="Remove"
-            ariaLabel={`Remove ${row.provider}`}
-            onPress={() => setPendingDelete(row.provider)}
-          />
+          {row.source === "config" ? null : (
+            <>
+              <RowAction
+                icon={FiEdit2}
+                label="Edit"
+                ariaLabel={`Edit ${row.provider}`}
+                onPress={() => {
+                  setIsAdding(false)
+                  setEditingProvider(row.provider)
+                }}
+              />
+              <RowAction
+                icon={FiTrash2}
+                label="Remove"
+                ariaLabel={`Remove ${row.provider}`}
+                onPress={() => setPendingDelete(row.provider)}
+              />
+            </>
+          )}
         </RowActionRow>
       ),
     },
@@ -391,7 +412,8 @@ function HostedProvidersContent() {
             ariaLabel="Hosted providers"
             columns={columns}
             rows={rows}
-            getRowKey={(row) => row.id}
+            // The name, not the id: a configured provider has no row id.
+            getRowKey={(row) => row.provider}
             isLoading={providers.isLoading}
           />
         </TableScrollFrame>
@@ -414,6 +436,9 @@ function HostedProvidersContent() {
         key={addOpenCount}
         isOpen={isAdding}
         onClose={() => setIsAdding(false)}
+        configuredProviders={rows
+          .filter((row) => row.source === "config")
+          .map((row) => row.provider)}
       />
       {editing ? (
         <EditHostedProviderForm
@@ -450,7 +475,11 @@ function HostedProvidersContent() {
           if (!open) setPendingDelete("")
         }}
         heading="Remove this hosted provider?"
-        body={`${pendingDelete} will stop being served, and its stored key is deleted. There is no way to recover the key; adding the provider again means entering it fresh.`}
+        body={
+          deleting?.shadows_config
+            ? `The stored key for ${pendingDelete} is deleted, and the provider defined in config.yml serves again, on the same models.`
+            : `${pendingDelete} will stop being served, and its stored key is deleted. There is no way to recover the key; adding the provider again means entering it fresh.`
+        }
         confirmLabel="Remove provider"
         isPending={remove.isPending}
         error={remove.error}
