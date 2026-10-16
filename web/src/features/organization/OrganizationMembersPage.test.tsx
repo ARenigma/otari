@@ -67,6 +67,9 @@ function mockApi(opts: {
   // The editor picks a budget rather than typing an amount, so the list has to
   // be served for the picker to have anything in it.
   budgets?: Budget[]
+  // What GET /models serves the caller, which is where the model-access picker
+  // looks: the organization's own providers and the deployment's managed models.
+  models?: string[]
   // What a tenant's picker offers instead: the organization's own budgets. Its
   // ceilings are `scopedBudgets`, read through the organization's surface.
   organizationBudgets?: Budget[]
@@ -78,6 +81,11 @@ function mockApi(opts: {
   const workspaceMembers = opts.workspaceMembers ?? {}
   const scopedBudgets = opts.scopedBudgets ?? []
   const budgetList = opts.budgets ?? []
+  const catalogModels = (opts.models ?? []).map((id) => ({
+    id,
+    object: "model",
+    owned_by: id.split(":")[0],
+  }))
   const organizationBudgets = opts.organizationBudgets ?? []
   const requests: Request[] = []
 
@@ -144,11 +152,8 @@ function mockApi(opts: {
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     })
 
-    if (url.includes(`${API_ROOT}/providers`)) {
-      return jsonResponse({ providers: [] })
-    }
-    if (url.includes(`${API_ROOT}/models/discoverable`)) {
-      return jsonResponse({ models: [] })
+    if (url.endsWith(`${API_ROOT}/models`)) {
+      return jsonResponse({ object: "list", data: catalogModels })
     }
     if (url.includes(`${API_ROOT}/aliases`)) {
       return jsonResponse([])
