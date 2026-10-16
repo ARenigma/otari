@@ -24,6 +24,7 @@ from gateway import features
 from gateway.api.deps import (
     build_budget_service,
     build_file_service,
+    build_hosted_discovery,
     build_hosted_provider_service,
     build_inference_service,
     build_trace_service,
@@ -332,7 +333,9 @@ _LIFESPAN_WORKERS: tuple[_LifespanWorker, ...] = (
     # Gating on it would strand the gateway: the TTL is runtime-settable, and
     # raising it from 0 flips every read onto a cache nothing then fills.
     _LifespanWorker(
-        "model discovery", lambda config, _container: run_discovery_refresher(config), reset_discovery_cache
+        "model discovery",
+        lambda config, _container: run_discovery_refresher(config, hosted=build_hosted_discovery(config)),
+        reset_discovery_cache,
     ),
     _LifespanWorker(
         "models.dev catalog", lambda config, _container: run_catalog_refresher(config), clear_catalog_cache
