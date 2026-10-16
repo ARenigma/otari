@@ -6,7 +6,7 @@ crosses the API boundary.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
@@ -37,9 +37,11 @@ STORED = "hosted provider credentials"
 class ResolvedHostedProvider:
     """A decrypted, usable upstream connection."""
 
-    api_key: str
+    api_key: str = field(repr=False)
     api_base: str | None
     client_args: dict[str, Any] | None
+    provider: str | None = None
+    """The stored provider name, an accepted alias folded, for a credential read back from a row."""
 
 
 def last4(api_key: str) -> str | None:
@@ -189,7 +191,9 @@ def credential_of(row: HostedProvider, *, quiet: bool = False) -> ResolvedHosted
                 row.provider,
             )
         return None
-    return ResolvedHostedProvider(api_key=api_key, api_base=row.api_base, client_args=client_args)
+    return ResolvedHostedProvider(
+        api_key=api_key, api_base=row.api_base, client_args=client_args, provider=row.provider
+    )
 
 
 def client_args_of(row: HostedProvider) -> dict[str, Any] | None:

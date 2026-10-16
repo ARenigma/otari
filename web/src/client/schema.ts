@@ -1094,7 +1094,8 @@ export interface paths {
          *     the deployment's row, else the models.dev default. Aliases and routing
          *     policies are not models and are not listed; see Routing. A visitor, where
          *     the catalog is public, sees the configured instances and the hosted
-         *     models at the deployment's rates, and nothing that belongs to a tenant.
+         *     models every organization reaches, at the deployment's rates, and nothing
+         *     that belongs to a tenant.
          */
         get: operations["catalog-list_catalog"];
         put?: never;
@@ -3173,13 +3174,17 @@ export interface paths {
          *
          *     Refused with a 403 on the same deployment-supplied-model rule the create path
          *     carries, so a row stored before that rule existed cannot be edited into a rate
-         *     nobody could create today.
+         *     nobody could create today, and with a 403 for a rate the deployment operator
+         *     set, which only the operator may change.
          */
         put: operations["organization-pricing-replace_organization_pricing"];
         post?: never;
         /**
          * Delete Organization Pricing
          * @description Remove an override, returning the model to the deployment price list.
+         *
+         *     Refused with a 403 for a rate the deployment operator set, which only the
+         *     operator may remove.
          */
         delete: operations["organization-pricing-delete_organization_pricing"];
         options?: never;
@@ -4253,6 +4258,9 @@ export interface paths {
         /**
          * List Pricing
          * @description List all model pricing.
+         *
+         *     A hosted provider restricted to another organization than the caller's is
+         *     left out, as it is from the catalog.
          */
         get: operations["pricing-list_pricing"];
         put?: never;
@@ -4287,7 +4295,8 @@ export interface paths {
          *     answers one row per key: the newest rate that has taken effect, or the
          *     earliest scheduled rate for a key that has none yet. ``count`` is the number
          *     of priced models, so a caller can page without reading the collection to
-         *     learn how long it is.
+         *     learn how long it is. A hosted provider restricted to another organization
+         *     than the caller's is left out of both.
          */
         get: operations["pricing-list_current_pricing"];
         put?: never;
@@ -4438,6 +4447,9 @@ export interface paths {
         /**
          * Get Pricing
          * @description Get pricing for a specific model as of a timestamp.
+         *
+         *     A 404 for a model of a hosted provider restricted to another organization
+         *     than the caller's.
          */
         get: operations["pricing-get_pricing"];
         put?: never;
@@ -4462,6 +4474,9 @@ export interface paths {
         /**
          * Get Pricing History
          * @description Return the full pricing history for a model.
+         *
+         *     A 404 for a model of a hosted provider restricted to another organization
+         *     than the caller's.
          */
         get: operations["pricing-get_pricing_history"];
         put?: never;
@@ -22782,6 +22797,20 @@ export interface operations {
                     "application/json": components["schemas"]["OrganizationModelPricingPublic"];
                 };
             };
+            /** @description The deployment holds the credential that serves the model. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The period overlaps one already stored for the model. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -22817,6 +22846,13 @@ export interface operations {
                     "application/json": components["schemas"]["OrganizationModelPricingPublic"];
                 };
             };
+            /** @description The deployment serves the model, or the deployment operator set the rate. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -22841,6 +22877,13 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The deployment operator set the rate. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -25112,6 +25155,13 @@ export interface operations {
                     "application/json": components["schemas"]["PricingResponse"];
                 };
             };
+            /** @description Nothing prices the model, or its hosted provider is restricted to another organization. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -25174,6 +25224,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PricingResponse"][];
                 };
+            };
+            /** @description Nothing prices the model, or its hosted provider is restricted to another organization. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

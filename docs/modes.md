@@ -96,30 +96,48 @@ plane.
 
 ## Managed models and BYO credentials
 
-Hybrid mode can receive two kinds of provider credential:
+A request is served on the first credential the ladder finds. A provider
+instance configured on the deployment, in `config.yml` or through the Providers
+page, serves every request that names it, including a bare `provider:model`
+request whose provider spells that instance's name. Where no instance answers,
+the organization's own provider key serves the request. Where that is missing
+too, one of the deployment's **hosted providers** does. A hosted provider is a credential the
+deployment's operator configures for the deployment to serve requests on, one
+per provider, with a roster of the models offered on it and the rate each is
+charged at on the deployment price list. Only a model switched on in that roster
+is served on the hosted credential: a model switched off, or one the roster does
+not list, is refused with `424`. A standalone deployment configures them
+on the Hosted providers page; a hosted control plane holds them for its data
+plane. The deployment settles the upstream bill for a hosted model, which is why
+its rate belongs to the deployment and not to any one organization.
+
+Hybrid mode can therefore receive two kinds of provider credential:
 
 - A workspace's own provider key. The upstream provider bills that workspace.
   Any hybrid gateway can use it, including a self-hosted one.
-- A mozilla.ai-managed credential. Usage is billed through otari.ai. Only
-  otari.ai's own gateway receives it.
+- A control plane's hosted-provider credential. Usage is billed by the control
+  plane. On otari.ai, only otari.ai's own gateway receives it.
 
-Managed model identifiers use the catalog values published by otari.ai. otari.ai
-refuses a managed credential to a self-hosted gateway, so platform-owned secrets
-never leave mozilla.ai's infrastructure.
+Managed model identifiers use the catalog values the control plane publishes.
+otari.ai refuses a hosted credential to a self-hosted gateway, so platform-owned
+secrets never leave mozilla.ai's infrastructure.
 
 ## Deployment-paid credentials in standalone
 
-A build that binds `ModelProviderPort` through `OTARI_BOOTSTRAP` can serve a
-model on a credential the deployment owns, once an organization's own key, a
-stored provider and `config.yml` have all missed. The deployment pays that
+A deployment can serve a model on a credential it owns, once an organization's
+own key, a stored provider and `config.yml` have all missed: the core serves it
+on one of the deployment's hosted providers, and a build may rebind
+`ModelProviderPort` through `OTARI_BOOTSTRAP` to decide differently. The deployment pays that
 upstream bill, so the request also goes through `BillingPort`. Before the
 provider call, the organization is granted any credit it is owed and refused
 with `402` (`insufficient_funds`) when it has no funds paid in. When the
 request settles, its cost, including the cost an abandoned or failed request
 still owes, is charged to the organization. No funds are held while the
 request runs, so concurrent requests can take an organization below zero. A
-request on any other credential never reaches either port, and the core's
-billing adapter does nothing, so a deployment with no overlay is unaffected.
+request on any other credential never reaches either port. The core's billing
+adapter does nothing, so with no overlay a hosted-provider request is served
+and recorded as deployment-paid on its usage row, and no organization is
+charged.
 
 Today this covers Chat Completions, Messages, Responses and the Playground for a
 plain model or a single-target alias or policy. A routing policy with fallback
