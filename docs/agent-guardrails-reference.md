@@ -1203,6 +1203,9 @@ more are added that a parser does not see:
 A **warning** is a gate that parses, runs, and may not mean what its author
 intended. Each kind has a stable code, which `validate` prints beside it:
 
+- `glob-matches-no-file`: a `forbidden` or `when_changed` field none of whose globs matches a file `git ls-files` lists,
+  so a rename or deletion elsewhere has left the gate covering nothing. A gate
+  over a file that is never tracked (a generated bundle) or comes later accepts it.
 - `glob-misses-shallower-depth`: a `**` glob whose shallower depth nothing else in the same field covers.
   `**` must consume at least one path segment, so `**/CLAUDE.md` reaches
   `web/CLAUDE.md` and never the root file, and `src/**/conftest.py` never

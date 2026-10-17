@@ -42,6 +42,7 @@ def _validate(
     judge_gate_limit: int = 5,
     verifier_gate_limit: int = 20,
     probe_verifier: Callable[[VerifierGate], str | None] | None = None,
+    tracked_paths: tuple[str, ...] | None = None,
 ) -> tuple[Finding, ...]:
     spec = parse_policy(_policy(gates), source="test")
     return validate_policy(
@@ -49,6 +50,7 @@ def _validate(
         judge_gate_limit=judge_gate_limit,
         verifier_gate_limit=verifier_gate_limit,
         probe_verifier=probe_verifier,
+        tracked_paths=tracked_paths,
     )
 
 
@@ -406,6 +408,32 @@ def test_a_glob_that_can_never_match_is_an_error(glob: str) -> None:
     assert "can never match" in findings[0][2]
 
 
+def test_a_glob_matching_no_tracked_file_warns() -> None:
+    """A rename elsewhere in the tree must not switch a gate off silently."""
+    findings = _validate(_PATH_GATE.format(forbidden='["src/gone.gen.ts"]'), tracked_paths=("src/a.py",))
+    assert [(f.severity, f.code) for f in findings] == [("warning", WarningCode.GLOB_MATCHES_NO_FILE)]
+    assert "no forbidden glob matches a tracked file" in findings[0].message
+
+
+def test_one_dead_glob_beside_a_live_one_is_not_warned_about() -> None:
+    """The gate still fires through the live glob, so nothing is switched off."""
+    findings = _validate(_PATH_GATE.format(forbidden='["src/gone.gen.ts", "src/*.py"]'), tracked_paths=("src/a.py",))
+    assert findings == ()
+
+
+def test_a_gate_with_no_when_changed_is_not_warned_about() -> None:
+    """An empty `when_changed` means the gate always applies, not that it matches nothing."""
+    gate = (
+        "  - id: v\n    type: verifier\n    runs: [stop.verifier]\n"
+        "    enforcement: required\n    verifier: x.sh\n    message: m\n"
+    )
+    assert _validate(gate, tracked_paths=("src/a.py",)) == ()
+
+
+def test_tracked_files_are_not_checked_when_none_are_given() -> None:
+    assert _findings(_PATH_GATE.format(forbidden='["src/gone.gen.ts"]')) == ()
+
+
 def test_a_backslash_glob_is_a_warning_not_an_error() -> None:
     """A POSIX filename may legally contain a backslash, so this is advice, not a proof."""
     findings = _findings(_PATH_GATE.format(forbidden=r'["web\\src\\x.ts"]'))
@@ -497,6 +525,7 @@ _GLOB_GATE_FIELDS: dict[GateType, str] = {
 _PROVOKING_GLOBS = {
     WarningCode.BACKSLASH_IN_GLOB: '"docs\\\\x.md"',
     WarningCode.GLOB_MISSES_SHALLOWER_DEPTH: '"**/CLAUDE.md"',
+    WarningCode.GLOB_MATCHES_NO_FILE: '"docs/x.md"',
 }
 
 _PROVOKING_POLICIES: dict[WarningCode, tuple[str, dict[str, int]]] = {
@@ -528,7 +557,7 @@ def test_every_gate_type_a_code_names_draws_that_code(code: WarningCode, gate_ty
     """A gate accepts a warning by its code, so each code must arrive on every gate type it names."""
     if code in _PROVOKING_GLOBS:
         gates = f"  - id: g\n    type: {gate_type}\n" + _GLOB_GATE_FIELDS[gate_type].format(glob=_PROVOKING_GLOBS[code])
-        limits: dict[str, int] = {}
+        limits: dict[str, Any] = {"tracked_paths": ()} if code is WarningCode.GLOB_MATCHES_NO_FILE else {}
     else:
         gates, limits = _PROVOKING_POLICIES[code]
     assert _codes(gates, **limits) == [code]

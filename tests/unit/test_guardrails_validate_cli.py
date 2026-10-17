@@ -1,11 +1,13 @@
 """Unit tests for `otari guardrails validate`, the offline check over a guardrail file.
 
 Offline is the contract, so these run with nothing stubbed: no gateway, no
-credential, no model CLI, no subprocess. The only thing the command touches
-beyond the guardrail file itself is the verifier script a verifier gate
-names, and that it stats rather than runs.
+credential, no model CLI. Beyond the guardrail file itself, the command stats
+the verifier script a verifier gate names rather than running it, and lists
+the tracked files with `git ls-files`, skipping that check where Git has no
+repository to list.
 """
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -114,6 +116,29 @@ def test_a_clean_guardrail_reports_nothing_and_exits_zero(repo: Path) -> None:
     assert result.exit_code == 0
     assert "demo/guardrails, 4 gate(s), schema 1.0" in result.output
     assert "0 error(s), 0 warning(s)" in result.output
+
+
+def test_a_glob_matching_no_tracked_file_is_a_warning_strict_fails_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one check that reads Git: a gate whose file was renamed away no longer passes `--strict`."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # noqa: S607 - test setup
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").touch()
+    subprocess.run(["git", "add", "src/a.py"], cwd=tmp_path, check=True)  # noqa: S607 - test setup
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        _HEADER + "  - id: no-generated-edits\n"
+        "    type: path\n"
+        "    runs: [pre_tool_use.edit_target, stop.working_tree]\n"
+        "    enforcement: required\n"
+        '    forbidden: ["src/gone.gen.ts"]\n'
+        "    message: Generated.\n",
+    )
+    result = _invoke("--strict")
+    assert "warning[glob-matches-no-file]: no-generated-edits" in result.output
+    assert result.exit_code == 1
 
 
 def test_a_malformed_guardrail_is_a_readable_error(repo: Path) -> None:

@@ -279,6 +279,7 @@ def validate_policy(
     judge_gate_limit: int,
     verifier_gate_limit: int,
     probe_verifier: Callable[[VerifierGate], str | None] | None = None,
+    tracked_paths: tuple[str, ...] | None = None,
 ) -> tuple[Finding, ...]:
     """Check a parsed guardrail for gates that run without meaning what they say.
 
@@ -286,6 +287,8 @@ def validate_policy(
     or ``None`` when the script is fine.
     Left unset, verifier gates are not checked at all,
     which is what keeps this module free of the filesystem access such a check needs.
+    ``tracked_paths`` is the repository's tracked files, and a glob field matching none of them is warned about.
+    Left unset, as for ``probe_verifier``, globs are not checked against the tree.
 
     ``judge_gate_limit`` and ``verifier_gate_limit`` are the per-Stop caps on the two gate types that run something.
     They are passed in so the number an author is warned about is the number that will actually be enforced.
@@ -298,6 +301,19 @@ def validate_policy(
 
     for gate in spec.gates:
         for field, globs in _glob_fields(gate):
+            # Per field, not per glob: one dead entry beside a live one leaves the gate working,
+            # and the shallower twin the warning below asks for is often such an entry.
+            # An empty `when_changed` means the gate always applies, so it is skipped.
+            if tracked_paths is not None and globs and not matched_changed_paths(globs, tracked_paths):
+                findings.append(
+                    _gate_warning(
+                        gate,
+                        WarningCode.GLOB_MATCHES_NO_FILE,
+                        f"no {field} glob matches a tracked file. If the file it named was renamed or "
+                        "deleted, the gate no longer covers it: update the glob. If the file is never "
+                        "tracked or comes later, accept this warning.",
+                    )
+                )
             for glob in globs:
                 dead = unreachable_glob(glob)
                 if dead is not None:

@@ -3676,8 +3676,8 @@ def guardrails_validate(
     submitted one is parsed, then reports what running it would have taught
     the hard way. An error is a gate that cannot do its job (a missing or
     unrunnable verifier script). A warning is a gate that runs and may not
-    mean what its author intended: a `**` glob that cannot reach the
-    repository root, a one-token forbidden phrase that also refuses commands
+    mean what its author intended: a glob field matching no file Git tracks,
+    a `**` glob that cannot reach the repository root, a one-token forbidden phrase that also refuses commands
     merely mentioning the word, a path gate blind to every shell write, more
     judge gates than one Stop event evaluates. A warning never fails on its
     own, since each has a legitimate exception; `--strict` is what makes one
@@ -3730,6 +3730,7 @@ def guardrails_validate(
         judge_gate_limit=max_judges,
         verifier_gate_limit=_HOOK_CHECK_MAX_GATES_PER_RUN,
         probe_verifier=lambda gate: _guardrails_probe_verifier(root, gate.verifier, origins[gate.id]),
+        tracked_paths=_guardrails_tracked_paths(root),
     )
     # `policy_id` is the composed set's own name where several files compose,
     # which is `target` again; one file declares its own, worth showing.
@@ -3877,6 +3878,12 @@ def _guardrails_git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         raise click.ClickException(f"`git {args[0]}` could not run ({exc}).") from exc
+
+
+def _guardrails_tracked_paths(repo_root: Path) -> tuple[str, ...] | None:
+    """The files Git tracks in `repo_root`, or `None` when Git cannot list them (no repository yet)."""
+    result = _guardrails_git(repo_root, "ls-files", "-z")
+    return tuple(path for path in result.stdout.split("\0") if path) if result.returncode == 0 else None
 
 
 def _guardrails_commit(repo_root: Path, revision: str, option: str) -> str:

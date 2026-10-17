@@ -334,11 +334,12 @@ otari guardrails validate --strict
 
 With no arguments it composes everything the hook composes and reports two kinds
 of finding. An error is a gate that cannot do its job whatever the session does:
-a missing verifier script, a glob that matches nothing, a phrase carrying a
-shell separator no segment can contain. A warning is a gate that runs and may
-not mean what its author intended: a `**` glob that skips the shallow case, a
-one-token `forbidden` phrase, a `path` gate naming only
-`pre_tool_use.edit_target`, more `judge` or `verifier` gates than one `Stop`
+a missing verifier script, a glob no path can ever match (`./x`, `../x`), a
+phrase carrying a shell separator no segment can contain. A warning is a gate
+that runs and may not mean what its author intended: a glob field matching no
+file Git tracks, a `**` glob that skips the shallow case, a one-token
+`forbidden` phrase, a `path` gate naming only `pre_tool_use.edit_target`, more
+`judge` or `verifier` gates than one `Stop`
 event evaluates. `--strict` exits non-zero on a warning as well, which is what a
 CI invocation wants. A gate whose design a warning describes names that warning's code in its `accept_warnings`, and `--strict` then does not count it.
 
